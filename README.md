@@ -14,6 +14,7 @@ known players. Usernames and rating labels are excluded from model inputs.
    games, and retain rated, completed standard games with usable clock annotations.
 2. **Split before training.** Assign games and prediction-target players to
    train, validation, and test partitions to reduce leakage from repeat players.
+   Select training sides by game-time rating/category quotas; leave hold-outs unchanged.
 3. **Analyze decisions.** Replay each game with Stockfish at depth 12, comparing
    played moves with the top three alternatives. Moves outside the top three get
    a separate evaluation so their quality is measured rather than guessed.
@@ -61,6 +62,29 @@ from [player_usernames.json](player_usernames.json), builds the dataset, trains 
 model, and exports a bundle. Individual stages are also available through
 `python -m elo_model --help`.
 
+Training selection is configured through `PipelineConfig.stratification`. Defaults
+collect up to 3,000 candidate games, then request 500 blitz rows and 100 rows for
+each other time category per rating band, with at most 10 rows per target player.
+Cell 5 reports available/selected players and rows, including unfilled quotas,
+before Stockfish runs. Quotas are caps, not guaranteed collection yields.
+
+For example, restrict training to a particular rating range and category:
+
+```python
+from dataclasses import replace
+from elo_model.config import RatingQuota, StratificationConfig
+
+settings = replace(settings, stratification=StratificationConfig(quotas=(
+   RatingQuota(lower=1000, upper=1400, category="blitz", rows=500),
+)))
+```
+
+Bounds are lower-inclusive and upper-exclusive. Apply overrides after notebook
+setup and before collection. Use `StratificationConfig()` to disable selection.
+CLI `split --selection-config quotas.json` accepts the same settings as JSON.
+Selection settings and coverage are saved beside the split manifest and included
+in the notebook's exported model provenance. Existing raw games remain reusable.
+
 Analysis uses **eight concurrent Stockfish processes** by default. Per-game
 evaluations are cached by move history, engine identity, and analysis settings, so
 additional datasets can reuse completed work. Changing worker count does not
@@ -72,6 +96,7 @@ invalidate the cache; features can also be recalculated without rerunning Stockf
 - [elo_model/analysis.py](elo_model/analysis.py): engine evaluation and persistent cache.
 - [elo_model/features.py](elo_model/features.py): player-level feature extraction.
 - [elo_model/split.py](elo_model/split.py): player-aware dataset partitioning.
+- [elo_model/selection.py](elo_model/selection.py): reproducible training quotas and coverage reports.
 - [elo_model/training.py](elo_model/training.py): model fitting, tuning, and evaluation.
 - [elo_model/predictor.py](elo_model/predictor.py): model export, loading, and inference.
 - [elo_model/pipeline.py](elo_model/pipeline.py): stage orchestration and parallel analysis.

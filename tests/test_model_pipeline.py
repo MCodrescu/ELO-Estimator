@@ -15,16 +15,63 @@ import pandas as pd
 
 from elo_model.__main__ import main
 from elo_model.analysis import AnalysisCache
-from elo_model.config import EngineConfig, PipelineConfig, TrainingConfig
+from elo_model.config import (
+    EngineConfig,
+    PipelineConfig,
+    RatingQuota,
+    StratificationConfig,
+    TrainingConfig,
+)
 from elo_model.game import GameInput
 from elo_model.pipeline import analyze_dataset, extract_dataset, save_feature_dataset
+from elo_model.split import PlayerSplitter
 from elo_model.storage import replace_checkpoint, write_json, write_parquet
 from tests.test_features import PGN, sample_analysis
 from tests.test_model_dataset import source_game
 from tests.test_model_training import synthetic_frame
+from training_data.model_dataset import training_record
 
 
 class PipelineTests(unittest.TestCase):
+    def test_cli_split_applies_training_quotas_and_saves_provenance(self):
+        """Apply CLI quotas before analysis without resampling hold-out games.
+
+        Args:
+            None.
+
+        Returns:
+            None; selected training counts, hold-outs and selection sidecars are asserted.
+        """
+        frame = pd.DataFrame([
+            training_record(source)
+            for _, archive in self.notebook_archives(90)
+            for source in archive
+        ])
+        config = StratificationConfig(max_rows_per_player=1, quotas=(
+            RatingQuota(lower=0, category="blitz", rows=12),
+        ))
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, output = root / "games.parquet", root / "split.parquet"
+            config_path = root / "quotas.json"
+            write_parquet(source, frame)
+            write_json(config_path, config.model_dump(mode="json"))
+            self.run_cli(
+                "split", "--input", str(source), "--output", str(output),
+                "--selection-config", str(config_path), "--min-rows", "2",
+            )
+            selected = pd.read_parquet(output)
+            train = selected.loc[selected["partition"] == "train"]
+            self.assertEqual(int(train[["keep_white", "keep_black"]].sum().sum()), 12)
+            expected = PlayerSplitter().assign(frame)
+            pd.testing.assert_frame_equal(
+                selected.loc[selected["partition"] != "train"].reset_index(drop=True),
+                expected.loc[expected["partition"] != "train"].reset_index(drop=True),
+            )
+            report = json.loads(output.with_suffix(".selection.json").read_text())
+            self.assertEqual(report["config"], config.model_dump(mode="json"))
+            self.assertEqual(report["coverage"][0]["shortfall"], 0)
+
     def test_analysis_rejects_invalid_workers_before_startup(self):
         """Reject invalid pool sizes before accessing an engine or output file.
 
@@ -216,9 +263,12 @@ class PipelineTests(unittest.TestCase):
                 artifact_directory=root / "model",
                 split_fractions=(0.6, 0.2, 0.2),
                 min_players_per_partition=2,
+                stratification=StratificationConfig(quotas=(
+                    RatingQuota(lower=0, category="blitz", rows=1000),
+                )),
                 training=TrainingConfig(trials=0, max_trees=5, min_rows=2),
             )
-            archives = self.notebook_archives(settings.target_games)
+            archives = self.notebook_archives(settings.candidate_games)
             metadata = {"engine": "synthetic-notebook-test"}
             namespace = {"test_settings": settings}
 
@@ -277,14 +327,22 @@ class PipelineTests(unittest.TestCase):
                 self.run_notebook_stage(cells[4], namespace, root)
                 namespace["analyze_dataset"] = analyze_fixture
 
-                for source in cells[5:]:
+                for source in cells[5:10]:
                     self.run_notebook_stage(source, namespace, root)
 
-            self.assertEqual(len(namespace["games_df"]), settings.target_games)
+            self.assertEqual(len(namespace["games_df"]), settings.candidate_games)
             self.assertTrue(settings.features_path.exists())
             self.assertTrue(
                 (settings.artifact_directory / "model_manifest.json").exists()
             )
+            manifest = json.loads(
+                (settings.artifact_directory / "model_manifest.json").read_text()
+            )
+            self.assertEqual(
+                manifest["selection"]["config"], settings.stratification.model_dump(mode="json")
+            )
+            self.assertEqual(manifest["candidate_games"], settings.candidate_games)
+            self.assertEqual(manifest["dataset_games"], len(namespace["split_games"]))
             self.assertEqual(
                 json.loads(usernames_path.read_text(encoding="utf-8")), ["Alice"]
             )

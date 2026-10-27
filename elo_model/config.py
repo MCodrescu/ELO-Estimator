@@ -3,9 +3,12 @@
 import math
 from dataclasses import asdict, dataclass, field
 from datetime import date
+from itertools import pairwise
 from pathlib import Path
+from typing import Literal, Self
 
 import chess
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 PARTITIONS = ("train", "validation", "test")
 DEFAULT_SEED = 42
@@ -326,6 +329,103 @@ class StorageConfig:
             raise ValueError("retry_delay must be finite and nonnegative")
 
 
+class RatingQuota(BaseModel):
+    """Requested player-side rows for one game-time rating/category interval."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    lower: int = Field(ge=0, strict=True)
+    upper: int | None = Field(default=None, gt=0, strict=True)
+    category: Literal["bullet", "blitz", "rapid", "classical"]
+    rows: int = Field(gt=0, strict=True)
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> Self:
+        """Require a nonempty half-open rating interval.
+
+        Args:
+            None.
+
+        Returns:
+            Validated quota; reversed intervals raise ValueError.
+        """
+        if self.upper is not None and self.upper <= self.lower:
+            raise ValueError("upper must exceed lower")
+        return self
+
+    @property
+    def label(self) -> str:
+        """Describe the inclusive lower and exclusive upper rating bounds.
+
+        Args:
+            None.
+
+        Returns:
+            Human-readable rating-band label.
+        """
+        if self.upper is None:
+            return f"{self.lower}+"
+        if self.lower == 0:
+            return f"<{self.upper}"
+        return f"{self.lower}-{self.upper}"
+
+
+class StratificationConfig(BaseModel):
+    """Training-only quotas, processed in order under a shared player-row cap.
+
+    An empty quota tuple disables selection and candidate-pool expansion.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    quotas: tuple[RatingQuota, ...] = ()
+    candidate_multiplier: int = Field(default=3, ge=1, strict=True)
+    max_rows_per_player: int = Field(default=10, ge=1, strict=True)
+
+    @model_validator(mode="after")
+    def validate_quotas(self) -> Self:
+        """Reject overlapping intervals within the same time category.
+
+        Args:
+            None.
+
+        Returns:
+            Validated settings; ambiguous quota membership raises ValueError.
+        """
+        for category in TIME_CATEGORIES:
+            quotas = sorted(
+                (quota for quota in self.quotas if quota.category == category),
+                key=lambda quota: quota.lower,
+            )
+            for left, right in pairwise(quotas):
+                if left.upper is None or left.upper > right.lower:
+                    raise ValueError(f"Overlapping rating quotas for {category}")
+        return self
+
+
+def default_stratification() -> StratificationConfig:
+    """Provide editable coverage targets across ratings and time categories.
+
+    Args:
+        None.
+
+    Returns:
+        Training quotas with a larger blitz allocation and smaller other groups.
+    """
+    return StratificationConfig(
+        quotas=tuple(
+            RatingQuota(
+                lower=int(lower),
+                upper=None if math.isinf(upper) else int(upper),
+                category=category,
+                rows=500 if category == "blitz" else 100,
+            )
+            for lower, upper in pairwise(RATING_BAND_EDGES)
+            for category in TIME_CATEGORIES
+        )
+    )
+
+
 @dataclass(frozen=True)
 class PipelineConfig:
     """Editable run settings for the saved-usernames notebook workflow."""
@@ -342,6 +442,7 @@ class PipelineConfig:
     split_fractions: tuple[float, float, float] = DEFAULT_SPLIT_FRACTIONS
     min_players_per_partition: int = 5
     strict_participants: bool = False
+    stratification: StratificationConfig = field(default_factory=default_stratification)
 
     collection: DatasetConfig = field(
         default_factory=lambda: DatasetConfig(
@@ -392,6 +493,21 @@ class PipelineConfig:
 
         if self.min_players_per_partition < 2:
             raise ValueError("min_players_per_partition must be at least two")
+
+    @property
+    def candidate_games(self) -> int:
+        """Budget a larger raw pool when training quotas are enabled.
+
+        Args:
+            None.
+
+        Returns:
+            Candidate-game collection target, independent of engine cache settings.
+        """
+        multiplier = (
+            self.stratification.candidate_multiplier if self.stratification.quotas else 1
+        )
+        return self.target_games * multiplier
 
     @property
     def raw_games_path(self) -> Path:

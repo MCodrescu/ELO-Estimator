@@ -17,6 +17,7 @@ from .config import (
     DatasetConfig,
     EngineConfig,
     FeatureConfig,
+    StratificationConfig,
     TrainingConfig,
 )
 from .evaluation import BAND_NAMES, rating_bands
@@ -33,11 +34,13 @@ from .pipeline import (
     split_summary,
 )
 from .predictor import RatingPredictor, export_bundle
+from .selection import StratifiedGameSelector
 from .split import PlayerSplitter
 from .storage import write_json, write_parquet
 from .training import ModelTrainer
 
 DEFAULT_FEATURES = str(CLI_CONFIG.features_path)
+logger = logging.getLogger(__name__)
 
 
 def read_json(path):
@@ -106,7 +109,21 @@ def run_split(args):
     splitter = PlayerSplitter(
         tuple(args.fractions), args.seed, args.strict_participants
     )
-    manifest = splitter.assign(games)
+    selection_config = (
+        StratificationConfig.model_validate(read_json(args.selection_config))
+        if args.selection_config else CLI_CONFIG.stratification
+    )
+    selector = StratifiedGameSelector(selection_config, seed=args.seed)
+    manifest = selector.select(splitter.assign(games))
+    selection = {
+        "config": selection_config.model_dump(mode="json"),
+        "seed": args.seed,
+        "candidate_games": len(games),
+        "coverage": selector.coverage.to_dict("records"),
+    }
+    write_json(Path(args.output).with_suffix(".selection.json"), selection)
+    if not selector.coverage.empty and selector.coverage["shortfall"].any():
+        logger.warning("Training quotas are underfilled; inspect the selection report")
     rows = manifest_rows(manifest)
     counts = split_summary(manifest)
     if any(
@@ -127,6 +144,7 @@ def run_split(args):
         "strict_participants": args.strict_participants,
         "seed": args.seed,
         "fractions": args.fractions,
+        "selection": selection,
     }
     write_parquet(args.output, manifest)
     write_json(Path(args.output).with_suffix(".split.json"), report)
@@ -306,6 +324,9 @@ def parser() -> argparse.ArgumentParser:
     split.add_argument("--seed", type=int, default=CLI_CONFIG.training.seed)
     split.add_argument("--min-rows", type=int, default=CLI_CONFIG.training.min_rows)
     split.add_argument("--strict-participants", action="store_true")
+    split.add_argument(
+        "--selection-config", help="JSON training quotas; use an empty object to disable selection",
+    )
     split.set_defaults(handler=run_split)
 
     analyze = commands.add_parser(

@@ -10,6 +10,7 @@ from elo_model.config import (
     EngineConfig,
     FeatureConfig,
     PipelineConfig,
+    StratificationConfig,
     TrainingConfig,
 )
 from elo_model.features import FeatureConfig as ExtractionFeatureConfig
@@ -19,6 +20,36 @@ from training_data.config import DatasetConfig as CollectionDatasetConfig
 
 class ConfigTests(unittest.TestCase):
     """Check canonical definitions and independently editable workflow settings."""
+
+    def test_stratification_validation_and_candidate_budget(self):
+        """Validate rating/category quotas without changing engine fingerprints.
+
+        Args:
+            None.
+
+        Returns:
+            None; budgets, interval constraints and unchanged engine settings are asserted.
+        """
+        settings = PipelineConfig()
+        self.assertEqual(settings.candidate_games, 3000)
+        disabled = replace(settings, stratification=StratificationConfig())
+        self.assertEqual(disabled.candidate_games, settings.target_games)
+        self.assertEqual(disabled.engine, settings.engine)
+        self.assertEqual(disabled.engine_cache_directory, settings.engine_cache_directory)
+        invalid = [
+            {"candidate_multiplier": 0},
+            {"max_rows_per_player": True},
+            {"quotas": [{"lower": 1400, "upper": 1000, "category": "blitz", "rows": 5}]},
+            {"quotas": [{"lower": 0, "category": "daily", "rows": 5}]},
+            {"quotas": [{"lower": 0, "category": "blitz", "rows": 0}]},
+            {"quotas": [
+                {"lower": 0, "upper": 1400, "category": "blitz", "rows": 5},
+                {"lower": 1000, "category": "blitz", "rows": 5},
+            ]},
+        ]
+        for payload in invalid:
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                StratificationConfig.model_validate(payload)
 
     def test_components_import_the_same_configuration_classes(self):
         """Keep compatibility aliases without duplicate class definitions.
