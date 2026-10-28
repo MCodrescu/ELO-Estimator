@@ -219,6 +219,7 @@ def run_train(args):
         result.metadata,
         result.report,
         FeatureConfig(**metadata["feature_config"]),
+        model_version=args.model_version,
     )
     for name, report in result.report.items():
         for partition in ("validation", "test"):
@@ -254,6 +255,7 @@ def run_export(args):
         source.manifest,
         report,
         source.extractor.config,
+        model_version=args.model_version,
     )
     print(json.dumps(verification, indent=2))
 
@@ -369,6 +371,7 @@ def parser() -> argparse.ArgumentParser:
     train.add_argument("--seed", type=int, default=CLI_CONFIG.training.seed)
     train.add_argument("--balance-bands", action="store_true")
     train.add_argument("--balance-players", action="store_true")
+    train.add_argument("--model-version", help="Release label for the exported weights")
     train.set_defaults(handler=run_train)
 
     export = commands.add_parser(
@@ -377,6 +380,7 @@ def parser() -> argparse.ArgumentParser:
     export.add_argument("--source", default=str(CLI_CONFIG.training_directory))
     export.add_argument("--output", default=str(CLI_CONFIG.artifact_directory))
     export.add_argument("--sample-features", default=DEFAULT_FEATURES)
+    export.add_argument("--model-version", help="Release label; retains source version when omitted")
     export.set_defaults(handler=run_export)
 
     predict = commands.add_parser(

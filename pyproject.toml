@@ -1,0 +1,37 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chess-rating-estimator"
+version = "0.1.0"
+description = "Reusable single-game chess rating estimation with native LightGBM models"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "chess>=1.11.2,<2",
+    "lightgbm>=4.6,<5",
+    "numpy>=2,<3",
+    "pandas>=2.2,<3",
+    "pydantic>=2,<3",
+    "tqdm>=4.67,<5",
+]
+
+[project.optional-dependencies]
+engine = ["pyarrow>=22"]
+chesscom = ["chess.com==3.13.0", "retryable==2016.3.11"]
+train = [
+    "chess.com==3.13.0",
+    "optuna>=4.5,<5",
+    "pyarrow>=22",
+    "retryable==2016.3.11",
+    "scikit-learn>=1.6,<2",
+]
+dev = ["build>=1.2", "ruff>=0.16,<0.17"]
+
+[project.urls]
+Repository = "https://github.com/MCodrescu/ELO-Estimator"
+
+[tool.setuptools.packages.find]
+include = ["elo_model*", "training_data*"]
+exclude = ["tests*"]

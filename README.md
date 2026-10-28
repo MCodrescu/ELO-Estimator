@@ -47,6 +47,29 @@ Missing observations remain missing rather than being filled with artificial
 zeros. Result and termination features make this a **post-game estimator**;
 predictions from unfinished games are outside the training distribution.
 
+## Reuse a Model
+
+Install the package with `pip install ".[engine]"` from this checkout and deploy
+an exported model bundle plus a compatible Stockfish executable:
+
+```python
+from elo_model.config import InferenceConfig
+from elo_model.inference import RatingEstimator
+
+estimator = RatingEstimator(InferenceConfig(
+   model_directory="artifacts/rating_model",
+   engine_executable="/path/to/stockfish",
+   cache_directory="data/analysis_cache",
+))
+estimate = estimator.predict_pgn(pgn_text)
+print(estimate.model_dump())
+```
+
+Reuse the estimator per worker; run engine analysis in background jobs for web
+apps. Models and Stockfish are not bundled with the package. See
+[docs/integration.md](docs/integration.md) for Django integration, installation in
+another repository, engine compatibility, and publishing versioned weights.
+
 ## Running It
 
 Install the Python dependencies and a Stockfish executable:

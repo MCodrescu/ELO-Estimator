@@ -329,6 +329,16 @@ class StorageConfig:
             raise ValueError("retry_delay must be finite and nonnegative")
 
 
+class InferenceConfig(BaseModel):
+    """Portable paths for loading weights and optionally analyzing new PGNs."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model_directory: Path
+    engine_executable: Path | None = None
+    cache_directory: Path | None = None
+
+
 class RatingQuota(BaseModel):
     """Requested player-side rows for one game-time rating/category interval."""
 

@@ -169,6 +169,7 @@ def export_bundle(
     metadata: dict,
     report: dict,
     feature_config: FeatureConfig | None = None,
+    model_version: str | None = None,
 ) -> dict:
     """Save native trees and verify reloaded predictions on supplied sample rows.
 
@@ -179,12 +180,15 @@ def export_bundle(
         metadata: Training, engine and target provenance for the manifest.
         report: JSON-compatible model evaluation and importance reports.
         feature_config: Exact transformations used to create training features.
+        model_version: Optional release label, separate from the Python package version.
 
     Returns:
         Reload parity, native model bytes and warm single-row timing measurements.
     """
     if not len(sample):
         raise ValueError("Export verification needs at least one sample row")
+    if model_version is not None and not model_version.strip():
+        raise ValueError("model_version must not be empty")
     if not set(models).issubset({"pooled", *TIME_CATEGORIES}):
         raise ValueError("Invalid model names")
     directory = Path(directory)
@@ -209,6 +213,8 @@ def export_bundle(
         },
     }
     write_json(directory / "feature_names.json", FEATURE_NAMES)
+    if model_version is not None:
+        manifest["model_version"] = model_version
     write_json(directory / "feature_groups.json", FEATURE_GROUPS)
     write_json(directory / "model_manifest.json", manifest)
     predictor = RatingPredictor(directory)

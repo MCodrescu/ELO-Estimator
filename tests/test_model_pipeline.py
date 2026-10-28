@@ -433,6 +433,12 @@ class PipelineTests(unittest.TestCase):
                 "0",
                 "--max-trees",
                 "5",
+                "--model-version",
+                "test-v1",
+            )
+            self.assertEqual(
+                json.loads((trained / "model_manifest.json").read_text())["model_version"],
+                "test-v1",
             )
             self.run_cli(
                 "export",
@@ -442,6 +448,12 @@ class PipelineTests(unittest.TestCase):
                 str(exported),
                 "--sample-features",
                 str(features),
+                "--model-version",
+                "test-v2",
+            )
+            self.assertEqual(
+                json.loads((exported / "model_manifest.json").read_text())["model_version"],
+                "test-v2",
             )
             output = root / "predictions.json"
             self.run_cli(
