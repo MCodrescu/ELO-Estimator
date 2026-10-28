@@ -17,6 +17,7 @@ from .config import (
     TIME_CATEGORIES,
     TIME_CATEGORY_LIMITS,
     TIME_CONTROL_INCREMENT_MOVES,
+    EngineCompatibility,
     FeatureConfig,
 )
 from .feature_schema import FEATURE_GROUPS, FEATURE_HASH, FEATURE_NAMES, SCHEMA_VERSION
@@ -113,11 +114,53 @@ class RatingPredictor:
             result[mask] = self.models[category].predict(matrix[mask], num_threads=1)
         return result
 
+    def validate_engine_metadata(
+        self,
+        engine_metadata: dict | None,
+        *,
+        engine_compatibility: EngineCompatibility = "exact",
+    ) -> None:
+        """Check analysis provenance, optionally allowing a different binary build.
+
+        Args:
+            engine_metadata: Actual runtime provenance; never relabeled as training data.
+            engine_compatibility: Exact metadata or same-release metadata excluding binary hash.
+
+        Returns:
+            None; unknown policies and incompatible engine contracts raise ValueError.
+        """
+        if engine_compatibility not in ("exact", "same-release"):
+            raise ValueError("Unknown engine compatibility policy")
+        expected = self.manifest.get("engine")
+        if expected is None or engine_metadata == expected:
+            return
+        if engine_compatibility == "same-release" and isinstance(expected, dict) and isinstance(engine_metadata, dict):
+            expected_contract = {key: value for key, value in expected.items() if key != "binary_sha256"}
+            actual_contract = {key: value for key, value in engine_metadata.items() if key != "binary_sha256"}
+            identity = expected.get("id")
+            complete = (
+                isinstance(identity, dict) and bool(identity.get("name"))
+                and "settings" in expected and "analysis_version" in expected
+            )
+            hashes = (expected.get("binary_sha256"), engine_metadata.get("binary_sha256"))
+            valid_hashes = all(
+                isinstance(value, str) and len(value) == 64
+                and all(character in "0123456789abcdef" for character in value)
+                for value in hashes
+            )
+            if complete and valid_hashes and expected_contract == actual_contract:
+                return
+        raise ValueError(
+            f"Analysis engine metadata must match the training artifact ({engine_compatibility})"
+        )
+
     def predict_game(
         self,
         game: GameInput,
         analysis: list[PositionAnalysis],
         engine_metadata: dict | None = None,
+        *,
+        engine_compatibility: EngineCompatibility = "exact",
     ) -> dict[str, float]:
         """Extract shared features and predict both sides using supplied analysis.
 
@@ -125,15 +168,14 @@ class RatingPredictor:
             game: Parsed standard-chess game, without requiring rating headers.
             analysis: Precomputed White-perspective scores aligned with replay.
             engine_metadata: Engine provenance matching the training artifact.
+            engine_compatibility: Allow a same-release build with a different binary hash.
 
         Returns:
             White and Black numeric predicted ratings.
         """
-        expected = self.manifest.get("engine")
-        if expected is not None and engine_metadata != expected:
-            raise ValueError(
-                "Analysis engine metadata must match the training artifact"
-            )
+        self.validate_engine_metadata(
+            engine_metadata, engine_compatibility=engine_compatibility
+        )
         rows = self.extractor.extract(game, analysis)
         predictions = self.predict(rows, [game.time_control()[2]] * 2)
         response = RatingPredictions(white=predictions[0], black=predictions[1])

@@ -284,7 +284,8 @@ def run_predict(args):
         payload = read_json(args.analysis)
         game = GameInput.from_pgn(Path(args.pgn).read_text(encoding="utf-8"))
         result = predictor.predict_game(
-            game, analysis_from_payload(payload["positions"]), payload.get("engine")
+            game, analysis_from_payload(payload["positions"]), payload.get("engine"),
+            engine_compatibility=args.engine_compatibility,
         )
     if args.output:
         write_json(args.output, result)
@@ -391,6 +392,10 @@ def parser() -> argparse.ArgumentParser:
     inputs.add_argument("--features")
     inputs.add_argument("--pgn")
     predict.add_argument("--analysis")
+    predict.add_argument(
+        "--engine-compatibility", choices=("exact", "same-release"), default="exact",
+        help="Allow a different binary build of the same engine release with matching settings",
+    )
     predict.add_argument("--output")
     predict.set_defaults(handler=run_predict)
     return root

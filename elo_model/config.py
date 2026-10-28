@@ -28,6 +28,7 @@ PIECE_VALUES = {
 }
 ANALYSIS_VERSION = 1
 FEATURE_SCHEMA_VERSION = 1
+EngineCompatibility = Literal["exact", "same-release"]
 
 
 @dataclass(frozen=True)
@@ -337,6 +338,7 @@ class InferenceConfig(BaseModel):
     model_directory: Path
     engine_executable: Path | None = None
     cache_directory: Path | None = None
+    engine_compatibility: EngineCompatibility = "exact"
 
 
 class RatingQuota(BaseModel):

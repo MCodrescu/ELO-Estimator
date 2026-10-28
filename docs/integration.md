@@ -8,8 +8,8 @@ The current bundle is tracked in `artifacts/rating_model`. Copy all five files
 from a pinned checkout, including the native model, manifest, feature names/groups,
 and evaluation report. Installing the wheel or Git-based Python dependency does
 not install these weights; they must be deployed separately. The current manifest
-records a Windows Stockfish fingerprint, so Linux-generated analysis is still
-rejected until cross-build compatibility is explicitly validated and supported.
+records a Windows Stockfish fingerprint. Exact matching remains the default;
+Linux deployments can opt into the same-release cross-build policy described below.
 
 ## Installation
 
@@ -37,6 +37,7 @@ estimator = RatingEstimator(InferenceConfig(
     model_directory="/srv/models/rating-v1",
     engine_executable="/opt/stockfish/stockfish",
     cache_directory="/srv/cache/chess-analysis",
+   engine_compatibility="same-release",
 ))
 
 estimate = estimator.predict_pgn(pgn_text)
@@ -47,7 +48,8 @@ Load the estimator once per worker process and reuse it. Construction loads mode
 but starts no engine and makes no network requests. Raw PGN prediction starts an
 engine for that call and reuses complete cached evaluations. The result contains
 `white`, `black`, a content-derived `model_id`, optional `model_version`, time
-`category`, `analysis_key`, and `cache_hit`. Ratings are estimates, not calibrated
+`category`, `analysis_key`, `cache_hit`, the chosen `engine_compatibility`, and actual
+runtime `engine_metadata`. Ratings are estimates, not calibrated
 confidence intervals or official rating updates.
 
 For a Chess.com API game object, pass `game_record["pgn"]` to the same method.
@@ -56,10 +58,20 @@ retry, proxy, authentication, and game-selection policies. The package also
 retains `training_data.ChessComConnection` for optional collection workflows.
 
 Raw analysis uses the depth, MultiPV, thread count, and hash size recorded in the
-bundle. The executable's binary/version fingerprint must match training provenance.
-A Windows-trained model is not automatically compatible with Linux-generated
-analysis: deploy matching engine environments or train a bundle for the target
-environment. Never relabel incompatible engine metadata to bypass this check.
+bundle. `engine_compatibility="exact"` requires all engine metadata to match training.
+Opt into `"same-release"` to reuse Windows-trained weights with a Linux build:
+only the binary SHA-256 may differ. The engine identity, analysis protocol version,
+depth, MultiPV, threads, hash size, and all other recorded metadata must still match.
+This applies to both raw PGNs and supplied analysis. Lower-level callers can use
+`RatingPredictor.predict_game(..., engine_compatibility="same-release")`; the CLI
+equivalent is `predict --engine-compatibility same-release`.
+
+No retraining is required to enable the policy. It permits cross-build inference;
+it does not certify equivalent features or accuracy. Match evaluation networks and
+other unrecorded engine options, then compare predictions on representative games
+before production use. Engine identity alone cannot verify the NNUE network.
+Runtime metadata is never rewritten, and cache keys still include the actual
+binary fingerprint, keeping Windows and Linux evaluations separate.
 
 ## Reuse Existing Analysis
 

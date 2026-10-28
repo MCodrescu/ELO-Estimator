@@ -75,6 +75,12 @@ apps. Models and Stockfish are not bundled with the package. See
 [docs/integration.md](docs/integration.md) for Django integration, installation in
 another repository, engine compatibility, and publishing versioned weights.
 
+For Linux inference with Windows-trained weights, set
+`engine_compatibility="same-release"` in `InferenceConfig`. This allows a different
+binary fingerprint while requiring the same engine identity and analysis settings.
+It does not establish cross-build prediction parity; compare representative games
+before deployment. Exact matching remains the default.
+
 ## Running It
 
 Install the Python dependencies and a Stockfish executable:

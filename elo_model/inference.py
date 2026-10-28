@@ -4,7 +4,7 @@ import hashlib
 import json
 
 from .analysis import AnalysisCache, StockfishAnalyzer
-from .config import EngineConfig, InferenceConfig
+from .config import EngineCompatibility, EngineConfig, InferenceConfig
 from .game import GameInput, PositionAnalysis
 from .predictor import RatingPredictions, RatingPredictor
 
@@ -17,6 +17,8 @@ class GameRatingEstimate(RatingPredictions):
     category: str | None
     analysis_key: str | None = None
     cache_hit: bool | None = None
+    engine_compatibility: EngineCompatibility = "exact"
+    engine_metadata: dict | None = None
 
 
 class RatingEstimator:
@@ -75,12 +77,16 @@ class RatingEstimator:
                 executable=str(self.config.engine_executable), **expected["settings"]
             )
             with StockfishAnalyzer(config, AnalysisCache(self.config.cache_directory)) as analyzer:
-                if analyzer.metadata != expected:
-                    raise ValueError("Analysis engine metadata must match the training artifact")
+                self.predictor.validate_engine_metadata(
+                    analyzer.metadata, engine_compatibility=self.config.engine_compatibility
+                )
                 key, analysis = analyzer.analyze(game, progress=progress)
                 engine_metadata = analyzer.metadata
                 cache_hit = analyzer.cache_hits > 0
-        predictions = self.predictor.predict_game(game, analysis, engine_metadata)
+        predictions = self.predictor.predict_game(
+            game, analysis, engine_metadata,
+            engine_compatibility=self.config.engine_compatibility,
+        )
         return GameRatingEstimate(
             **predictions,
             model_id=self.model_id,
@@ -88,4 +94,6 @@ class RatingEstimator:
             category=game.time_control()[2],
             analysis_key=key,
             cache_hit=cache_hit,
+            engine_compatibility=self.config.engine_compatibility,
+            engine_metadata=engine_metadata,
         )
