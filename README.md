@@ -49,6 +49,11 @@ predictions from unfinished games are outside the training distribution.
 
 ## Reuse a Model
 
+The current trained bundle is checked in under `artifacts/rating_model`; its
+[model manifest](artifacts/rating_model/model_manifest.json) records the feature
+and engine contract. Copy the complete directory from a pinned Git commit into
+the consuming application's deployment. These files are not included in the wheel.
+
 Install the package with `pip install ".[engine]"` from this checkout and deploy
 an exported model bundle plus a compatible Stockfish executable:
 

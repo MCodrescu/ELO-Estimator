@@ -1,0 +1,948 @@
+{
+  "models": {
+    "pooled": {
+      "parameters": {
+        "num_leaves": 26,
+        "min_child_samples": 28,
+        "reg_lambda": 0.029398662617196713,
+        "colsample_bytree": 0.9293721396819058,
+        "max_depth": 8
+      },
+      "trials": [
+        {
+          "trial": 0,
+          "mae": 351.6046877436419,
+          "parameters": {
+            "num_leaves": 16,
+            "min_child_samples": 58,
+            "reg_lambda": 1.5702970884055387,
+            "colsample_bytree": 0.8795975452591109,
+            "max_depth": 3
+          }
+        },
+        {
+          "trial": 1,
+          "mae": 346.7255748048168,
+          "parameters": {
+            "num_leaves": 10,
+            "min_child_samples": 12,
+            "reg_lambda": 3.9676050770529883,
+            "colsample_bytree": 0.8803345035229626,
+            "max_depth": 7
+          }
+        },
+        {
+          "trial": 2,
+          "mae": 354.93132451318075,
+          "parameters": {
+            "num_leaves": 7,
+            "min_child_samples": 59,
+            "reg_lambda": 3.142880890840109,
+            "colsample_bytree": 0.7637017332034828,
+            "max_depth": 4
+          }
+        },
+        {
+          "trial": 3,
+          "mae": 350.142701242318,
+          "parameters": {
+            "num_leaves": 11,
+            "min_child_samples": 25,
+            "reg_lambda": 0.3752055855124282,
+            "colsample_bytree": 0.8295835055926347,
+            "max_depth": 4
+          }
+        },
+        {
+          "trial": 4,
+          "mae": 351.3925119646556,
+          "parameters": {
+            "num_leaves": 22,
+            "min_child_samples": 17,
+            "reg_lambda": 0.07523742884534858,
+            "colsample_bytree": 0.8099085529881075,
+            "max_depth": 5
+          }
+        },
+        {
+          "trial": 5,
+          "mae": 355.47929019986776,
+          "parameters": {
+            "num_leaves": 26,
+            "min_child_samples": 20,
+            "reg_lambda": 0.34890188454913873,
+            "colsample_bytree": 0.8777243706586128,
+            "max_depth": 3
+          }
+        },
+        {
+          "trial": 6,
+          "mae": 343.7369088534063,
+          "parameters": {
+            "num_leaves": 22,
+            "min_child_samples": 18,
+            "reg_lambda": 0.015673095467235415,
+            "colsample_bytree": 0.984665661176,
+            "max_depth": 8
+          }
+        },
+        {
+          "trial": 7,
+          "mae": 342.1038786763876,
+          "parameters": {
+            "num_leaves": 27,
+            "min_child_samples": 25,
+            "reg_lambda": 0.019634341572933336,
+            "colsample_bytree": 0.905269907953647,
+            "max_depth": 5
+          }
+        },
+        {
+          "trial": 8,
+          "mae": 346.8477417356934,
+          "parameters": {
+            "num_leaves": 10,
+            "min_child_samples": 35,
+            "reg_lambda": 0.012681352169084602,
+            "colsample_bytree": 0.9727961206236346,
+            "max_depth": 4
+          }
+        },
+        {
+          "trial": 9,
+          "mae": 348.74985340256103,
+          "parameters": {
+            "num_leaves": 23,
+            "min_child_samples": 25,
+            "reg_lambda": 0.3632486956676606,
+            "colsample_bytree": 0.8640130838029838,
+            "max_depth": 4
+          }
+        },
+        {
+          "trial": 10,
+          "mae": 349.89028749812036,
+          "parameters": {
+            "num_leaves": 31,
+            "min_child_samples": 39,
+            "reg_lambda": 0.056283899930717474,
+            "colsample_bytree": 0.7053885626844459,
+            "max_depth": 6
+          }
+        },
+        {
+          "trial": 11,
+          "mae": 347.72153113075404,
+          "parameters": {
+            "num_leaves": 29,
+            "min_child_samples": 34,
+            "reg_lambda": 0.010502104887614197,
+            "colsample_bytree": 0.9941994740078894,
+            "max_depth": 8
+          }
+        },
+        {
+          "trial": 12,
+          "mae": 348.04580526328584,
+          "parameters": {
+            "num_leaves": 20,
+            "min_child_samples": 10,
+            "reg_lambda": 0.03777589722019716,
+            "colsample_bytree": 0.9465244376887645,
+            "max_depth": 6
+          }
+        },
+        {
+          "trial": 13,
+          "mae": 341.50392307419247,
+          "parameters": {
+            "num_leaves": 26,
+            "min_child_samples": 28,
+            "reg_lambda": 0.029398662617196713,
+            "colsample_bytree": 0.9293721396819058,
+            "max_depth": 8
+          }
+        },
+        {
+          "trial": 14,
+          "mae": 351.5380300020524,
+          "parameters": {
+            "num_leaves": 27,
+            "min_child_samples": 45,
+            "reg_lambda": 0.12687249255756564,
+            "colsample_bytree": 0.9260209727085998,
+            "max_depth": 7
+          }
+        },
+        {
+          "trial": 15,
+          "mae": 345.5494306838988,
+          "parameters": {
+            "num_leaves": 17,
+            "min_child_samples": 28,
+            "reg_lambda": 0.02888938963100192,
+            "colsample_bytree": 0.904246290945161,
+            "max_depth": 5
+          }
+        },
+        {
+          "trial": 16,
+          "mae": 349.19144888619127,
+          "parameters": {
+            "num_leaves": 26,
+            "min_child_samples": 47,
+            "reg_lambda": 0.12373956607413909,
+            "colsample_bytree": 0.9366311737268417,
+            "max_depth": 7
+          }
+        },
+        {
+          "trial": 17,
+          "mae": 346.95846347667805,
+          "parameters": {
+            "num_leaves": 31,
+            "min_child_samples": 29,
+            "reg_lambda": 0.02733356814727158,
+            "colsample_bytree": 0.7951550181651582,
+            "max_depth": 6
+          }
+        },
+        {
+          "trial": 18,
+          "mae": 347.97964097590017,
+          "parameters": {
+            "num_leaves": 24,
+            "min_child_samples": 43,
+            "reg_lambda": 0.1571395282067794,
+            "colsample_bytree": 0.9088898668179638,
+            "max_depth": 5
+          }
+        },
+        {
+          "trial": 19,
+          "mae": 347.79488480834266,
+          "parameters": {
+            "num_leaves": 28,
+            "min_child_samples": 32,
+            "reg_lambda": 8.087411777442796,
+            "colsample_bytree": 0.9422262408405976,
+            "max_depth": 8
+          }
+        }
+      ],
+      "best_iteration": 313,
+      "feature_importance": {
+        "time_control": {
+          "gain": 4491.8457407951355,
+          "gain_fraction": 0.04768712876669078,
+          "splits": 168
+        },
+        "self_accuracy": {
+          "gain": 11396.336766004562,
+          "gain_fraction": 0.12098780995378312,
+          "splits": 994
+        },
+        "self_phase": {
+          "gain": 12164.952762126923,
+          "gain_fraction": 0.12914772730052998,
+          "splits": 738
+        },
+        "self_position": {
+          "gain": 4784.07603597641,
+          "gain_fraction": 0.05078955581338866,
+          "splits": 436
+        },
+        "self_complexity": {
+          "gain": 4894.409609556198,
+          "gain_fraction": 0.05196089864976513,
+          "splits": 497
+        },
+        "self_patterns": {
+          "gain": 440.2279996871948,
+          "gain_fraction": 0.004673626504384321,
+          "splits": 39
+        },
+        "self_clock": {
+          "gain": 8819.549651384354,
+          "gain_fraction": 0.09363166594749057,
+          "splits": 777
+        },
+        "context": {
+          "gain": 2701.5799436569214,
+          "gain_fraction": 0.028680991752818203,
+          "splits": 238
+        },
+        "material": {
+          "gain": 4703.3032746315,
+          "gain_fraction": 0.04993204171041903,
+          "splits": 402
+        },
+        "opponent_accuracy": {
+          "gain": 12222.163628339767,
+          "gain_fraction": 0.1297550994369255,
+          "splits": 1034
+        },
+        "opponent_phase": {
+          "gain": 8226.009675979614,
+          "gain_fraction": 0.08733042167762527,
+          "splits": 662
+        },
+        "opponent_position": {
+          "gain": 4912.243075847626,
+          "gain_fraction": 0.05215022545492946,
+          "splits": 423
+        },
+        "opponent_complexity": {
+          "gain": 5785.253117799759,
+          "gain_fraction": 0.06141842937099182,
+          "splits": 581
+        },
+        "opponent_patterns": {
+          "gain": 26.402830123901367,
+          "gain_fraction": 0.0002803024040849338,
+          "splits": 3
+        },
+        "opponent_clock": {
+          "gain": 8625.736766815186,
+          "gain_fraction": 0.0915740752561732,
+          "splits": 729
+        }
+      },
+      "partitions": {
+        "train": {
+          "lightgbm": {
+            "overall": {
+              "rows": 2634,
+              "players": 1997,
+              "mae": 181.70292813206942,
+              "rmse": 292.258830906108,
+              "player_macro_mae": 195.14103399431465
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 700,
+                "players": 687,
+                "mae": 329.4203134970461,
+                "rmse": 435.3555140825915,
+                "player_macro_mae": 328.72387076362014
+              },
+              "1000-1400": {
+                "rows": 319,
+                "players": 205,
+                "mae": 96.00928810289322,
+                "rmse": 175.48444940393637,
+                "player_macro_mae": 100.05467175300532
+              },
+              "1400-1800": {
+                "rows": 535,
+                "players": 475,
+                "mae": 88.2725237339887,
+                "rmse": 166.34323722547165,
+                "player_macro_mae": 89.57081145013566
+              },
+              "1800-2200": {
+                "rows": 544,
+                "players": 294,
+                "mae": 163.56645271165726,
+                "rmse": 243.91278936294896,
+                "player_macro_mae": 163.34188185728732
+              },
+              "2200+": {
+                "rows": 536,
+                "players": 357,
+                "mae": 151.45220125800404,
+                "rmse": 256.6944743056489,
+                "player_macro_mae": 157.44444913673505
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 2242,
+                "players": 1708,
+                "mae": 180.40989146368864,
+                "rmse": 292.9500585218314,
+                "player_macro_mae": 195.06025979746238
+              },
+              "bullet": {
+                "rows": 161,
+                "players": 139,
+                "mae": 183.8663954027065,
+                "rmse": 285.68556809948683,
+                "player_macro_mae": 190.94289410630935
+              },
+              "rapid": {
+                "rows": 231,
+                "players": 173,
+                "mae": 192.7447895170788,
+                "rmse": 290.0637004331877,
+                "player_macro_mae": 212.81083309410946
+              }
+            }
+          },
+          "ridge": {
+            "overall": {
+              "rows": 2634,
+              "players": 1997,
+              "mae": 349.1960396401254,
+              "rmse": 435.32286317942874,
+              "player_macro_mae": 363.60028813707817
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 700,
+                "players": 687,
+                "mae": 509.1132190506649,
+                "rmse": 592.5432699485385,
+                "player_macro_mae": 509.2252110755289
+              },
+              "1000-1400": {
+                "rows": 319,
+                "players": 205,
+                "mae": 314.7429234915385,
+                "rmse": 371.22304700746196,
+                "player_macro_mae": 314.6859196053062
+              },
+              "1400-1800": {
+                "rows": 535,
+                "players": 475,
+                "mae": 233.89206257788007,
+                "rmse": 293.8424339780511,
+                "player_macro_mae": 232.7625077099802
+              },
+              "1800-2200": {
+                "rows": 544,
+                "players": 294,
+                "mae": 308.5494526331248,
+                "rmse": 378.85441727015103,
+                "player_macro_mae": 312.6385881006663
+              },
+              "2200+": {
+                "rows": 536,
+                "players": 357,
+                "mae": 317.19583352842966,
+                "rmse": 398.5721779323009,
+                "player_macro_mae": 325.0158146326297
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 2242,
+                "players": 1708,
+                "mae": 344.80909491754,
+                "rmse": 430.3864908932122,
+                "player_macro_mae": 360.57373342474375
+              },
+              "bullet": {
+                "rows": 161,
+                "players": 139,
+                "mae": 419.86492225762566,
+                "rmse": 504.0350332452488,
+                "player_macro_mae": 417.0948716046503
+              },
+              "rapid": {
+                "rows": 231,
+                "players": 173,
+                "mae": 342.52002217960086,
+                "rmse": 431.27312777631715,
+                "player_macro_mae": 360.68132024860444
+              }
+            }
+          },
+          "train_median": {
+            "overall": {
+              "rows": 2634,
+              "players": 1997,
+              "mae": 582.462794229309,
+              "rmse": 711.75989188616,
+              "player_macro_mae": 620.9333989078856
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 700,
+                "players": 687,
+                "mae": 1083.2557142857142,
+                "rmse": 1115.2568538233693,
+                "player_macro_mae": 1083.7071809801068
+              },
+              "1000-1400": {
+                "rows": 319,
+                "players": 205,
+                "mae": 436.8260188087774,
+                "rmse": 455.14955256900095,
+                "player_macro_mae": 446.7909310878823
+              },
+              "1400-1800": {
+                "rows": 535,
+                "players": 475,
+                "mae": 95.1803738317757,
+                "rmse": 115.92096687289863,
+                "player_macro_mae": 96.34479532163743
+              },
+              "1800-2200": {
+                "rows": 544,
+                "players": 294,
+                "mae": 317.7444852941176,
+                "rmse": 342.41533410379236,
+                "player_macro_mae": 315.1981265522081
+              },
+              "2200+": {
+                "rows": 536,
+                "players": 357,
+                "mae": 770.1604477611941,
+                "rmse": 780.6844346899483,
+                "player_macro_mae": 764.3191943444045
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 2242,
+                "players": 1708,
+                "mae": 553.436217662801,
+                "rmse": 682.9212088994414,
+                "player_macro_mae": 582.3454067692651
+              },
+              "bullet": {
+                "rows": 161,
+                "players": 139,
+                "mae": 916.4068322981367,
+                "rmse": 978.046246953652,
+                "player_macro_mae": 967.8327338129496
+              },
+              "rapid": {
+                "rows": 231,
+                "players": 173,
+                "mae": 631.4350649350649,
+                "rmse": 763.7753963441124,
+                "player_macro_mae": 747.5661643270024
+              }
+            }
+          }
+        },
+        "validation": {
+          "lightgbm": {
+            "overall": {
+              "rows": 364,
+              "players": 188,
+              "mae": 341.50392307419247,
+              "rmse": 434.5043299998947,
+              "player_macro_mae": 353.1885004963929
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 143,
+                "players": 80,
+                "mae": 439.423593505834,
+                "rmse": 534.6976177133081,
+                "player_macro_mae": 432.9919312661747
+              },
+              "1000-1400": {
+                "rows": 42,
+                "players": 21,
+                "mae": 316.020007835197,
+                "rmse": 380.77863040166443,
+                "player_macro_mae": 343.3129107726312
+              },
+              "1400-1800": {
+                "rows": 76,
+                "players": 36,
+                "mae": 259.8064670618016,
+                "rmse": 338.5779964361043,
+                "player_macro_mae": 240.12544839425266
+              },
+              "1800-2200": {
+                "rows": 33,
+                "players": 23,
+                "mae": 336.02890823560205,
+                "rmse": 394.27658100438504,
+                "player_macro_mae": 363.1271191004685
+              },
+              "2200+": {
+                "rows": 70,
+                "players": 34,
+                "mae": 248.03954757316757,
+                "rmse": 336.05215318394295,
+                "player_macro_mae": 260.17104632338356
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 293,
+                "players": 156,
+                "mae": 333.02554336443063,
+                "rmse": 424.0902320156486,
+                "player_macro_mae": 354.4171434182896
+              },
+              "bullet": {
+                "rows": 39,
+                "players": 21,
+                "mae": 356.43329022020083,
+                "rmse": 455.37284958673615,
+                "player_macro_mae": 347.3804422725281
+              },
+              "rapid": {
+                "rows": 32,
+                "players": 15,
+                "mae": 400.9389210825009,
+                "rmse": 498.0279236804233,
+                "player_macro_mae": 320.47212271428276
+              }
+            }
+          },
+          "ridge": {
+            "overall": {
+              "rows": 364,
+              "players": 188,
+              "mae": 361.0220602300967,
+              "rmse": 457.52421734034436,
+              "player_macro_mae": 382.2040680888447
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 143,
+                "players": 80,
+                "mae": 474.89720663660813,
+                "rmse": 575.0197489845706,
+                "player_macro_mae": 477.57470207358074
+              },
+              "1000-1400": {
+                "rows": 42,
+                "players": 21,
+                "mae": 260.6709749246115,
+                "rmse": 332.04437847040407,
+                "player_macro_mae": 282.18901152510784
+              },
+              "1400-1800": {
+                "rows": 76,
+                "players": 36,
+                "mae": 252.7375889590654,
+                "rmse": 309.4639258485799,
+                "player_macro_mae": 230.1780670149636
+              },
+              "1800-2200": {
+                "rows": 33,
+                "players": 23,
+                "mae": 377.24867499749445,
+                "rmse": 461.6638945919203,
+                "player_macro_mae": 408.8033193974536
+              },
+              "2200+": {
+                "rows": 70,
+                "players": 34,
+                "mae": 298.51836274400375,
+                "rmse": 377.4066266119505,
+                "player_macro_mae": 326.44390626813293
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 293,
+                "players": 156,
+                "mae": 359.1973894568777,
+                "rmse": 452.72437113820615,
+                "player_macro_mae": 384.8061594025964
+              },
+              "bullet": {
+                "rows": 39,
+                "players": 21,
+                "mae": 339.41059620917014,
+                "rmse": 448.96850226005,
+                "player_macro_mae": 360.42887551610704
+              },
+              "rapid": {
+                "rows": 32,
+                "players": 15,
+                "mae": 404.0681737728873,
+                "rmse": 508.7089585049503,
+                "player_macro_mae": 360.0014013754026
+              }
+            }
+          },
+          "train_median": {
+            "overall": {
+              "rows": 364,
+              "players": 188,
+              "mae": 669.7774725274726,
+              "rmse": 797.1647957219772,
+              "player_macro_mae": 704.9556190558851
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 143,
+                "players": 80,
+                "mae": 1069.63986013986,
+                "rmse": 1104.9761246352728,
+                "player_macro_mae": 1091.084781746032
+              },
+              "1000-1400": {
+                "rows": 42,
+                "players": 21,
+                "mae": 462.45238095238096,
+                "rmse": 483.29638200295153,
+                "player_macro_mae": 461.13773448773446
+              },
+              "1400-1800": {
+                "rows": 76,
+                "players": 36,
+                "mae": 114.88157894736842,
+                "rmse": 137.9387259085104,
+                "player_macro_mae": 111.5604256854257
+              },
+              "1800-2200": {
+                "rows": 33,
+                "players": 23,
+                "mae": 273.8636363636364,
+                "rmse": 289.87877560362114,
+                "player_macro_mae": 283.26894409937887
+              },
+              "2200+": {
+                "rows": 70,
+                "players": 34,
+                "mae": 766.4142857142857,
+                "rmse": 780.8737551157494,
+                "player_macro_mae": 788.5607088989442
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 293,
+                "players": 156,
+                "mae": 633.1279863481228,
+                "rmse": 777.8147152302205,
+                "player_macro_mae": 685.1843718603334
+              },
+              "bullet": {
+                "rows": 39,
+                "players": 21,
+                "mae": 793.3205128205128,
+                "rmse": 835.124798749971,
+                "player_macro_mae": 796.5760073260075
+              },
+              "rapid": {
+                "rows": 32,
+                "players": 15,
+                "mae": 854.78125,
+                "rmse": 915.970284725438,
+                "player_macro_mae": 775.33
+              }
+            }
+          }
+        },
+        "test": {
+          "lightgbm": {
+            "overall": {
+              "rows": 319,
+              "players": 181,
+              "mae": 385.18026677928503,
+              "rmse": 484.4999923993661,
+              "player_macro_mae": 356.9588365179606
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 147,
+                "players": 82,
+                "mae": 518.3045830332351,
+                "rmse": 598.1990675154335,
+                "player_macro_mae": 500.4251360469205
+              },
+              "1000-1400": {
+                "rows": 34,
+                "players": 18,
+                "mae": 284.8375395026257,
+                "rmse": 336.21933596967955,
+                "player_macro_mae": 256.8157965144035
+              },
+              "1400-1800": {
+                "rows": 45,
+                "players": 34,
+                "mae": 247.17999941335123,
+                "rmse": 324.92274634564734,
+                "player_macro_mae": 252.04924520902867
+              },
+              "1800-2200": {
+                "rows": 36,
+                "players": 20,
+                "mae": 276.3506297309025,
+                "rmse": 321.60240375716137,
+                "player_macro_mae": 251.01211335610523
+              },
+              "2200+": {
+                "rows": 57,
+                "players": 31,
+                "mae": 279.3953054333999,
+                "rmse": 418.0487395923583,
+                "player_macro_mae": 220.64564052432078
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 270,
+                "players": 162,
+                "mae": 379.90965377251655,
+                "rmse": 481.6571424439109,
+                "player_macro_mae": 356.741946975158
+              },
+              "bullet": {
+                "rows": 29,
+                "players": 12,
+                "mae": 391.743035109716,
+                "rmse": 491.92615988183405,
+                "player_macro_mae": 313.6093528606293
+              },
+              "rapid": {
+                "rows": 20,
+                "players": 12,
+                "mae": 446.8175282915345,
+                "rmse": 511.1807689018034,
+                "player_macro_mae": 408.5591524287685
+              }
+            }
+          },
+          "ridge": {
+            "overall": {
+              "rows": 319,
+              "players": 181,
+              "mae": 405.2659896125009,
+              "rmse": 504.0910381030407,
+              "player_macro_mae": 378.8485174089606
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 147,
+                "players": 82,
+                "mae": 541.1492977392152,
+                "rmse": 630.2220950876188,
+                "player_macro_mae": 519.2996106853868
+              },
+              "1000-1400": {
+                "rows": 34,
+                "players": 18,
+                "mae": 268.63397348941936,
+                "rmse": 345.9599334521592,
+                "player_macro_mae": 276.49218636780705
+              },
+              "1400-1800": {
+                "rows": 45,
+                "players": 34,
+                "mae": 249.773396383671,
+                "rmse": 302.5444132465613,
+                "player_macro_mae": 256.53908577395936
+              },
+              "1800-2200": {
+                "rows": 36,
+                "players": 20,
+                "mae": 266.11971828714263,
+                "rmse": 336.4311227148603,
+                "player_macro_mae": 255.6604702072546
+              },
+              "2200+": {
+                "rows": 57,
+                "players": 31,
+                "mae": 346.9690548154485,
+                "rmse": 427.392176916731,
+                "player_macro_mae": 283.8579262390005
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 270,
+                "players": 162,
+                "mae": 390.68169664719863,
+                "rmse": 491.27026115671316,
+                "player_macro_mae": 378.45069916690255
+              },
+              "bullet": {
+                "rows": 29,
+                "players": 12,
+                "mae": 468.23874037020187,
+                "rmse": 558.7439176961958,
+                "player_macro_mae": 356.21787971450914
+              },
+              "rapid": {
+                "rows": 20,
+                "players": 12,
+                "mae": 510.84345604541534,
+                "rmse": 584.9438076628513,
+                "player_macro_mae": 432.0539375348617
+              }
+            }
+          },
+          "train_median": {
+            "overall": {
+              "rows": 319,
+              "players": 181,
+              "mae": 713.8291536050157,
+              "rmse": 819.1279324679487,
+              "player_macro_mae": 692.1992932405225
+            },
+            "by_rating_band": {
+              "<1000": {
+                "rows": 147,
+                "players": 82,
+                "mae": 1025.391156462585,
+                "rmse": 1060.0573875814396,
+                "player_macro_mae": 1063.0380312099824
+              },
+              "1000-1400": {
+                "rows": 34,
+                "players": 18,
+                "mae": 499.7647058823529,
+                "rmse": 515.2189283378931,
+                "player_macro_mae": 485.87546296296296
+              },
+              "1400-1800": {
+                "rows": 45,
+                "players": 34,
+                "mae": 103.58888888888889,
+                "rmse": 121.79867268023354,
+                "player_macro_mae": 100.55588235294118
+              },
+              "1800-2200": {
+                "rows": 36,
+                "players": 20,
+                "mae": 299.8611111111111,
+                "rmse": 318.8707941052823,
+                "player_macro_mae": 274.80071428571426
+              },
+              "2200+": {
+                "rows": 57,
+                "players": 31,
+                "mae": 781.2368421052631,
+                "rmse": 789.1724318505953,
+                "player_macro_mae": 762.8000366568915
+              }
+            },
+            "by_category": {
+              "blitz": {
+                "rows": 270,
+                "players": 162,
+                "mae": 678.2851851851852,
+                "rmse": 795.522966821663,
+                "player_macro_mae": 667.708431640376
+              },
+              "bullet": {
+                "rows": 29,
+                "players": 12,
+                "mae": 869.5344827586207,
+                "rmse": 893.9899569365689,
+                "player_macro_mae": 907.611111111111
+              },
+              "rapid": {
+                "rows": 20,
+                "players": 12,
+                "mae": 967.9,
+                "rmse": 999.7738494279594,
+                "player_macro_mae": 859.7962962962962
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "export_verification": {
+    "sample_rows": 64,
+    "max_absolute_difference": 0.0,
+    "warm_single_row_ms": 0.6889399999636225,
+    "native_model_bytes": 899957
+  }
+}

@@ -4,6 +4,13 @@ Install the Python package and deploy a compatible model bundle separately. The
 package contains inference code, not trained weights or a Stockfish executable.
 Code and model versions are independent; pin both in the consuming application.
 
+The current bundle is tracked in `artifacts/rating_model`. Copy all five files
+from a pinned checkout, including the native model, manifest, feature names/groups,
+and evaluation report. Installing the wheel or Git-based Python dependency does
+not install these weights; they must be deployed separately. The current manifest
+records a Windows Stockfish fingerprint, so Linux-generated analysis is still
+rejected until cross-build compatibility is explicitly validated and supported.
+
 ## Installation
 
 From a checkout, install `pip install ".[engine]"` for PGN analysis with the
