@@ -44,16 +44,17 @@ class PlayerPoolBuilder:
             raise ValueError(f"{path} must contain a JSON list of strings")
         return list(dict.fromkeys(name.strip().casefold() for name in names if name.strip()))
 
-    def build(self) -> list[str]:
+    def build(self, progress: bool | None = None) -> list[str]:
         """Merge saved players with separately stratified time-category searches.
 
         Args:
-            None.
+            progress: Show discovery bars; None uses the training progress setting.
 
         Returns:
             Seeded-shuffled usernames; completed identical searches reuse checkpoints.
         """
         settings = self.settings
+        show_progress = settings.training.progress if progress is None else progress
         original = self.load(settings.seed_usernames_path)
         names = list(dict.fromkeys([*original, *self.load(settings.usernames_path)]))
         if settings.discovery_enabled:
@@ -77,7 +78,7 @@ class PlayerPoolBuilder:
                 else:
                     print(f"Discovering {category} players: up to {config.search_max_expansions:,} archive owners")
                     search = RatingStratifiedPlayerSearch(ChessComConnection(config))
-                    discovered = search.search(seed_usernames=seeds)
+                    discovered = search.search(seed_usernames=seeds, progress=show_progress)
                     write_json(checkpoint, {
                         "signature": signature,
                         "usernames": discovered,

@@ -3,6 +3,7 @@ from bisect import bisect_right
 from collections import deque
 
 from chessdotcom.endpoints.player_games_by_month import Game
+from tqdm.auto import tqdm
 
 from .chess_com_connection import ChessComConnection
 
@@ -314,7 +315,8 @@ class RatingStratifiedPlayerSearch:
         return seed
 
     def search(
-        self, seed_username: str | None = None, *, seed_usernames: list[str] | None = None
+        self, seed_username: str | None = None, *, seed_usernames: list[str] | None = None,
+        progress: bool = False,
     ) -> list[str]:
         """Return a partial within-quota sample if the expansion budget is exhausted.
 
@@ -325,6 +327,7 @@ class RatingStratifiedPlayerSearch:
         Args:
             seed_username: Starting username, or the configured seed.
             seed_usernames: Optional additional starting players across rating bands.
+            progress: Display archive-budget and retained-username progress bars.
 
         Returns:
             Unique usernames within rating quotas, possibly a partial sample.
@@ -339,28 +342,45 @@ class RatingStratifiedPlayerSearch:
             self.band_quotas,
         )
         reason = "band quotas filled"
-        while any(
-            len(bucket) < quota for bucket, quota in zip(self._buckets, self._quotas)
+        with (
+            tqdm(
+                total=config.search_max_expansions * len(config.months),
+                desc=f"{config.search_time_class}: archive budget",
+                unit="archive", disable=not progress,
+            ) as archive_bar,
+            tqdm(
+                total=config.search_max_players,
+                desc=f"{config.search_time_class}: rating-band quotas",
+                unit="player", disable=not progress,
+            ) as player_bar,
         ):
-            batch = self._next_batch()
-            if not batch:
-                reason = (
-                    "expansion budget reached"
-                    if self.expanded_count >= config.search_max_expansions
-                    else "frontier exhausted or depth limit reached"
+            while any(
+                len(bucket) < quota for bucket, quota in zip(self._buckets, self._quotas)
+            ):
+                batch = self._next_batch()
+                if not batch:
+                    reason = (
+                        "expansion budget reached"
+                        if self.expanded_count >= config.search_max_expansions
+                        else "frontier exhausted or depth limit reached"
+                    )
+                    break
+                logger.info(
+                    "Expanding %d players (%d/%d budget): %s",
+                    len(batch),
+                    self.expanded_count,
+                    config.search_max_expansions,
+                    batch,
                 )
-                break
-            logger.info(
-                "Expanding %d players (%d/%d budget): %s",
-                len(batch),
-                self.expanded_count,
-                config.search_max_expansions,
-                batch,
-            )
-            for owner, games in self.connection.iter_player_games(batch):
-                for game in games:
-                    self._observe(owner, game)
-            logger.info("Rating-band progress: %s", self.band_counts)
+                for owner, games in self.connection.iter_player_games(batch):
+                    for game in games:
+                        self._observe(owner, game)
+                    archive_bar.set_postfix(owner=owner, discovered=len(self._names), refresh=False)
+                    archive_bar.update(1)
+                    player_bar.update(sum(self.band_counts.values()) - player_bar.n)
+                logger.info("Rating-band progress: %s", self.band_counts)
+            archive_bar.set_postfix_str(reason)
+            player_bar.set_postfix_str(reason)
 
         result = [
             self._names[key]

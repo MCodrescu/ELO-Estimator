@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 from requests.exceptions import ConnectionError
+from tqdm.std import tqdm
 
 from elo_model.config import PipelineConfig
 from elo_model.storage import write_json
@@ -55,6 +56,38 @@ def game(
 
 
 class RatingStratifiedPlayerSearchTests(unittest.TestCase):
+    def test_progress_counts_archives_and_capped_rating_quotas(self):
+        """Count monthly archives separately without overcounting accepted players.
+
+        Args:
+            None.
+
+        Returns:
+            None; progress totals, final counts and bar closure are asserted.
+        """
+        search, connection = self.make_search(
+            {}, search_max_expansions=1, months=((2026, 9), (2026, 10)),
+        )
+        connection.iter_player_games.side_effect = None
+        connection.iter_player_games.return_value = [
+            ("Seed", [game("Seed", 1700, f"Player{band}", band * 250) for band in range(6)]),
+            ("Seed", [game("Seed", 1700, f"Player{band}", band * 250) for band in range(6, 11)]),
+        ]
+        archive_bar = tqdm(total=2, file=io.StringIO())
+        player_bar = tqdm(total=11, file=io.StringIO())
+        with (
+            patch("training_data.rating_stratified_player_search.tqdm", side_effect=[archive_bar, player_bar]) as bars,
+            self.assertLogs("training_data.rating_stratified_player_search", level="INFO"),
+        ):
+            result = search.search(progress=True)
+        self.assertEqual(len(result), 11)
+        self.assertEqual(archive_bar.n, 2)
+        self.assertEqual(player_bar.n, 11)
+        self.assertEqual([call.kwargs["total"] for call in bars.call_args_list], [2, 11])
+        self.assertTrue(all(not call.kwargs["disable"] for call in bars.call_args_list))
+        self.assertTrue(archive_bar.disable)
+        self.assertTrue(player_bar.disable)
+
     def test_player_pool_preserves_source_and_reuses_category_checkpoints(self):
         """Reuse searches while allowing new explicit seeds to extend discovery.
 
@@ -88,13 +121,15 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
                 self.assertEqual(set(first), {"seed", "existing", "newplayer"})
                 self.assertEqual(PlayerPoolBuilder(settings).build(), first)
                 self.assertEqual(search.search.call_count, 3)
+                self.assertTrue(search.search.call_args.kwargs["progress"])
                 self.assertEqual(
                     {call.args[0].search_time_class for call in connection.call_args_list},
                     {"blitz", "rapid", "bullet"},
                 )
                 changed = replace(settings, discovery_seed_usernames=("Elite",))
-                PlayerPoolBuilder(changed).build()
+                PlayerPoolBuilder(changed).build(progress=False)
                 self.assertEqual(search.search.call_count, 6)
+                self.assertFalse(search.search.call_args.kwargs["progress"])
                 self.assertIn("Elite", search.search.call_args.kwargs["seed_usernames"])
             self.assertEqual(json.loads(source.read_text()), ["Seed", "Existing"])
 
