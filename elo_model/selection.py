@@ -25,6 +25,38 @@ class StratifiedGameSelector:
         self.seed = seed
         self.coverage = pd.DataFrame()
 
+    def partition_coverage(self, games: pd.DataFrame) -> pd.DataFrame:
+        """Expose rows and distinct players for every requested partition/group.
+
+        Args:
+            games: Selected split manifest, before costly engine analysis.
+
+        Returns:
+            Coverage including empty rating/category groups in each partition.
+        """
+        sides = self._side_rows(games)
+        reports = []
+        for partition in ("train", "validation", "test"):
+            for quota in self.config.quotas:
+                mask = (
+                    (sides["partition"] == partition)
+                    & (sides["category"] == quota.category)
+                    & (sides["rating"] >= quota.lower)
+                )
+                if quota.upper is not None:
+                    mask &= sides["rating"] < quota.upper
+                eligible = sides.loc[mask]
+                reports.append({
+                    "partition": partition,
+                    "rating_band": quota.label,
+                    "category": quota.category,
+                    "rows": len(eligible),
+                    "players": eligible["target_username"].nunique(),
+                })
+        return pd.DataFrame(reports, columns=(
+            "partition", "rating_band", "category", "rows", "players",
+        ))
+
     def _side_rows(self, games: pd.DataFrame) -> pd.DataFrame:
         """Expand eligible sides with stable sampling priorities.
 

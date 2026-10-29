@@ -6,8 +6,9 @@ import json
 import runpy
 import tempfile
 import unittest
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
+from textwrap import indent
 from threading import Barrier, get_ident
 from unittest.mock import MagicMock, Mock, patch
 
@@ -328,7 +329,7 @@ class PipelineTests(unittest.TestCase):
                 patch("logging.basicConfig"),
             ):
                 setup = cells[0].replace(
-                    "settings = PipelineConfig()", "settings = test_settings"
+                    "settings = PipelineConfig.expanded()", "settings = test_settings"
                 )
                 self.run_notebook_stage(setup, namespace, root)
                 self.run_notebook_stage(cells[1], namespace, root)
@@ -348,6 +349,22 @@ class PipelineTests(unittest.TestCase):
 
                 self.run_notebook_stage(cells[3], namespace, root)
                 self.run_notebook_stage(cells[4], namespace, root)
+                namespace["settings"] = replace(settings, min_training_group_players=100)
+                preflight = (
+                    "try:\n" + indent(cells[4], "    ")
+                    + "\nexcept ValueError as error:\n    preflight_error = str(error)\n"
+                )
+                self.run_notebook_stage(preflight, namespace, root)
+                self.assertIn("Coverage needs review", namespace["preflight_error"])
+                self.assertFalse(namespace["coverage_approved"])
+                with patch("elo_model.pipeline.StockfishAnalyzer") as engine:
+                    with self.assertRaisesRegex(ValueError, "approve split coverage"):
+                        self.run_notebook_stage(cells[5], namespace, root)
+                    engine.assert_not_called()
+                namespace["allow_underfilled_bands"] = True
+                self.run_notebook_stage(cells[4], namespace, root)
+                self.assertTrue(namespace["coverage_approved"])
+                namespace["settings"] = settings
                 namespace["analyze_dataset"] = analyze_fixture
 
                 for source in cells[5:10]:

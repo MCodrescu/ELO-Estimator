@@ -1,14 +1,23 @@
+import contextlib
+import io
+import json
+import tempfile
 import unittest
+from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from requests.exceptions import ConnectionError
 
+from elo_model.config import PipelineConfig
+from elo_model.storage import write_json
 from training_data import (
     ChessComConnection,
     DatasetConfig,
     RatingStratifiedPlayerSearch,
 )
+from training_data.preparation import PlayerPoolBuilder
 
 
 def game(
@@ -46,6 +55,72 @@ def game(
 
 
 class RatingStratifiedPlayerSearchTests(unittest.TestCase):
+    def test_player_pool_preserves_source_and_reuses_category_checkpoints(self):
+        """Reuse searches while allowing new explicit seeds to extend discovery.
+
+        Args:
+            None.
+
+        Returns:
+            None; source preservation, category isolation and cache reuse are checked.
+        """
+        search = Mock()
+        search.search.return_value = ["NewPlayer"]
+        search.band_counts = {"100-349": 1}
+        search.band_quotas = {"100-349": 300}
+        search.expanded_count = 1
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "original.json"
+            write_json(source, ["Seed", "Existing"])
+            settings = replace(
+                PipelineConfig.expanded(),
+                seed_usernames_path=source,
+                usernames_path=root / "pool.json",
+                data_directory=root,
+            )
+            with (
+                patch("training_data.preparation.ChessComConnection") as connection,
+                patch("training_data.preparation.RatingStratifiedPlayerSearch", return_value=search),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                first = PlayerPoolBuilder(settings).build()
+                self.assertEqual(set(first), {"seed", "existing", "newplayer"})
+                self.assertEqual(PlayerPoolBuilder(settings).build(), first)
+                self.assertEqual(search.search.call_count, 3)
+                self.assertEqual(
+                    {call.args[0].search_time_class for call in connection.call_args_list},
+                    {"blitz", "rapid", "bullet"},
+                )
+                changed = replace(settings, discovery_seed_usernames=("Elite",))
+                PlayerPoolBuilder(changed).build()
+                self.assertEqual(search.search.call_count, 6)
+                self.assertIn("Elite", search.search.call_args.kwargs["seed_usernames"])
+            self.assertEqual(json.loads(source.read_text()), ["Seed", "Existing"])
+
+    def test_multiple_seeds_and_zero_quota_bridge_bands(self):
+        """Reach disconnected bands without retaining out-of-range bridges.
+
+        Args:
+            None.
+
+        Returns:
+            None; multiple seeds fill exact lower-inclusive target intervals.
+        """
+        search, _ = self.make_search(
+            {
+                "Seed": [game("Seed", 99, "Low", 100)],
+                "Elite": [game("Elite", 3501, "High", 3500)],
+            },
+            search_band_edges=(0, 100, 350, 3350, 3501),
+            search_band_quotas=(0, 1, 0, 1, 0),
+            search_max_players=2,
+        )
+        with self.assertLogs("training_data.rating_stratified_player_search", level="INFO"):
+            result = search.search(seed_usernames=["Elite", "seed"])
+        self.assertEqual(set(result), {"Low", "High"})
+        self.assertEqual(search.band_counts, search.band_quotas)
+
     def make_search(self, graph, **settings):
         """Build a bounded search over deterministic archive fixtures.
 

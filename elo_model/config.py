@@ -2,7 +2,7 @@
 
 import math
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import UTC, date, datetime
 from itertools import pairwise
 from pathlib import Path
 from typing import Literal, Self
@@ -19,6 +19,14 @@ TIME_CATEGORY_LIMITS = (180, 600, 3600, math.inf)
 TIME_CONTROL_INCREMENT_MOVES = 40
 RATING_BAND_EDGES = (0, 1000, 1400, 1800, 2200, math.inf)
 RATING_BAND_NAMES = ("<1000", "1000-1400", "1400-1800", "1800-2200", "2200+")
+EXPANDED_RATING_EDGES = (*range(100, 3351, 250), 3501)
+EXPANDED_CATEGORY_ROWS = {"blitz": 1000, "rapid": 500, "bullet": 500}
+EXPANDED_REPORT_EDGES = (0, *EXPANDED_RATING_EDGES, math.inf)
+EXPANDED_REPORT_NAMES = (
+    "<100",
+    *(f"{lower}-{3500 if upper == 3501 else upper}" for lower, upper in pairwise(EXPANDED_RATING_EDGES)),
+    ">3500",
+)
 PIECE_VALUES = {
     chess.PAWN: 100,
     chess.KNIGHT: 300,
@@ -49,6 +57,7 @@ class DatasetConfig:
     search_time_class: str = "blitz"
     search_max_expansions: int = 1000
     search_band_edges: tuple[int, ...] = tuple(range(0, 2501, 250))
+    search_band_quotas: tuple[int, ...] | None = None
 
     user_agent: str = "ChessTrainingResearch/0.1"
     proxy_url: str = "http://sub.proxy.att.com:8080"
@@ -150,6 +159,15 @@ class DatasetConfig:
             raise ValueError(
                 "search_band_edges must be increasing integers starting at 0"
             )
+        if self.search_band_quotas is not None and (
+            len(self.search_band_quotas) != len(self.search_band_edges)
+            or any(
+                isinstance(quota, bool) or not isinstance(quota, int) or quota < 0
+                for quota in self.search_band_quotas
+            )
+            or sum(self.search_band_quotas) != self.search_max_players
+        ):
+            raise ValueError("search_band_quotas must match bands and sum to search_max_players")
 
     def _validate_transport(self) -> None:
         """Check retry, logging and worker settings.
@@ -480,6 +498,12 @@ class PipelineConfig:
     target_games: int = 1000
     preview_rows: int = 10
     usernames_path: Path = Path("player_usernames.json")
+    seed_usernames_path: Path = Path("player_usernames.json")
+    discovery_enabled: bool = False
+    discovery_seed_usernames: tuple[str, ...] = ()
+    discovery_seed_limit: int = 200
+    min_training_group_players: int = 0
+    min_holdout_group_players: int = 0
 
     data_directory: Path = Path("data/notebook")
     analysis_directory: Path = Path("data/notebook_fast_v2")
@@ -515,6 +539,53 @@ class PipelineConfig:
         )
     )
 
+    @classmethod
+    def expanded(cls) -> Self:
+        """Prepare an isolated wide-rating run with unchanged engine settings.
+
+        Args:
+            None.
+
+        Returns:
+            Settings for 28,000 training rows and six recent archive months.
+        """
+        today = datetime.now(UTC).date()
+        month_index = today.year * 12 + today.month - 1
+        months = tuple(
+            ((month_index - offset) // 12, (month_index - offset) % 12 + 1)
+            for offset in range(6)
+        )
+        return cls(
+            target_games=20000,
+            usernames_path=Path("data/expanded/usernames.json"),
+            data_directory=Path("data/expanded"),
+            analysis_directory=Path("data/expanded"),
+            artifact_directory=Path("artifacts/rating_model_expanded"),
+            training_directory=Path("runs/expanded"),
+            discovery_enabled=True,
+            min_training_group_players=100,
+            min_holdout_group_players=20,
+            collection=DatasetConfig(
+                months=months,
+                max_games_per_player=10,
+                search_band_edges=(0, *EXPANDED_RATING_EDGES),
+                search_band_quotas=(0, *(300 for _ in range(14)), 0),
+                search_max_players=4200,
+                search_max_expansions=3000,
+                log_level="WARNING",
+            ),
+            stratification=StratificationConfig(
+                quotas=tuple(
+                    RatingQuota(lower=lower, upper=upper, category=category, rows=rows)
+                    for lower, upper in pairwise(EXPANDED_RATING_EDGES)
+                    for category, rows in EXPANDED_CATEGORY_ROWS.items()
+                ),
+            ),
+            training=TrainingConfig(
+                min_rows=30, balance_bands=False, balance_players=True, progress=True,
+            ),
+        )
+
     def __post_init__(self) -> None:
         """Validate workflow targets without filesystem or engine work.
 
@@ -541,6 +612,19 @@ class PipelineConfig:
 
         if self.min_players_per_partition < 2:
             raise ValueError("min_players_per_partition must be at least two")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (self.min_training_group_players, self.min_holdout_group_players)
+        ):
+            raise ValueError("Group player minimums must be nonnegative integers")
+        if (
+            isinstance(self.discovery_seed_limit, bool)
+            or not isinstance(self.discovery_seed_limit, int)
+            or self.discovery_seed_limit < 1
+        ):
+            raise ValueError("discovery_seed_limit must be a positive integer")
+        if any(not isinstance(name, str) or not name.strip() for name in self.discovery_seed_usernames):
+            raise ValueError("discovery_seed_usernames must contain nonempty strings")
 
     @property
     def candidate_games(self) -> int:

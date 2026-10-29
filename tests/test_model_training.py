@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 
 from elo_model.config import EngineConfig, FeatureConfig
-from elo_model.evaluation import evaluate, sample_weights
+from elo_model.evaluation import evaluate, rating_bands, sample_weights
 from elo_model.feature_schema import FEATURE_NAMES
 from elo_model.predictor import RatingPredictor, export_bundle
 from elo_model.training import ModelTrainer, TrainingConfig
@@ -40,6 +40,32 @@ def synthetic_frame():
 
 
 class TrainingTests(unittest.TestCase):
+    def test_expanded_report_boundaries_bias_and_empty_categories(self):
+        """Keep exact edge ratings and sparse category groups visible.
+
+        Args:
+            None.
+
+        Returns:
+            None; expanded intervals, counts and signed bias are asserted.
+        """
+        frame = pd.DataFrame({
+            "rating": [99, 100, 349, 350, 3349, 3350, 3500, 3501],
+            "target_username": [f"player{index}" for index in range(8)],
+            "category": ["blitz"] * 8,
+        })
+        self.assertEqual(list(rating_bands(frame["rating"], expanded=True)), [
+            "<100", "100-350", "100-350", "350-600", "3100-3350",
+            "3350-3500", "3350-3500", ">3500",
+        ])
+        report = evaluate(frame, frame["rating"].to_numpy() + 25)
+        self.assertEqual(report["overall"]["signed_bias"], 25)
+        self.assertEqual(report["by_expanded_rating_band"]["3350-3500"]["rows"], 2)
+        empty = report["by_rating_band_category"]["100-350"]["rapid"]
+        self.assertEqual(empty["rows"], 0)
+        self.assertEqual(empty["players"], 0)
+        self.assertIsNone(empty["signed_bias"])
+
     def test_fast_schema_export_and_incompatible_analysis_rejection(self):
         """Train reduced inputs and reject legacy provenance or overwrite attempts.
 

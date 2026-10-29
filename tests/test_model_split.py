@@ -75,6 +75,14 @@ class SplitTests(unittest.TestCase):
         )
         self.assertEqual(selector.coverage["shortfall"].tolist(), [1, 2])
         self.assertEqual(selector.coverage["selected_players"].tolist(), [2, 0])
+        groups = selector.partition_coverage(selected)
+        self.assertEqual(len(groups), 6)
+        populated = groups.loc[
+            (groups["partition"] == "train") & (groups["category"] == "blitz")
+        ].iloc[0]
+        self.assertEqual(populated["rows"], 2)
+        self.assertEqual(populated["players"], 2)
+        self.assertEqual(int(groups.loc[groups["category"] == "rapid", "rows"].sum()), 0)
 
     def test_stratified_selection_is_seeded_and_player_diverse(self):
         """Prefer distinct targets and enforce a cap across quota groups.

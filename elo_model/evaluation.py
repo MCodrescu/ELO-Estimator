@@ -3,21 +3,28 @@
 import numpy as np
 import pandas as pd
 
+from .config import EXPANDED_REPORT_EDGES, EXPANDED_REPORT_NAMES, TIME_CATEGORIES
 from .config import RATING_BAND_EDGES as BAND_EDGES
 from .config import RATING_BAND_NAMES as BAND_NAMES
 from .feature_schema import FEATURE_GROUPS
 
 
-def rating_bands(ratings) -> pd.Categorical:
+def rating_bands(ratings, expanded: bool = False) -> pd.Categorical:
     """Use left-closed rating intervals, including the requested edge values.
 
     Args:
         ratings: Positive numeric game-time rating labels.
+        expanded: Use 250-point target intervals and explicit out-of-range bands.
 
     Returns:
         Categorical band labels in the original row order.
     """
-    return pd.cut(ratings, BAND_EDGES, labels=BAND_NAMES, right=False)
+    return pd.cut(
+        ratings,
+        EXPANDED_REPORT_EDGES if expanded else BAND_EDGES,
+        labels=EXPANDED_REPORT_NAMES if expanded else BAND_NAMES,
+        right=False,
+    )
 
 
 def error_summary(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
@@ -37,6 +44,7 @@ def error_summary(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
             "mae": None,
             "rmse": None,
             "player_macro_mae": None,
+            "signed_bias": None,
         }
     error = predictions - frame["rating"].to_numpy(dtype=float)
     player_errors = (
@@ -52,6 +60,7 @@ def error_summary(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
         "mae": float(np.abs(error).mean()),
         "rmse": float(np.sqrt(np.mean(error**2))),
         "player_macro_mae": float(player_errors.mean()),
+        "signed_bias": float(error.mean()),
     }
 
 
@@ -69,6 +78,8 @@ def evaluate(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
     if predictions.shape != (len(frame),) or not np.isfinite(predictions).all():
         raise ValueError("Predictions must be one finite value per row")
     bands = rating_bands(frame["rating"])
+    expanded_bands = rating_bands(frame["rating"], expanded=True)
+    categories = sorted(set(TIME_CATEGORIES) | set(frame["category"].unique()))
     return {
         "overall": error_summary(frame, predictions),
         "by_rating_band": {
@@ -81,6 +92,22 @@ def evaluate(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
                 predictions[(frame["category"] == name).to_numpy()],
             )
             for name in sorted(frame["category"].unique())
+        },
+        "by_expanded_rating_band": {
+            name: error_summary(
+                frame.loc[expanded_bands == name], predictions[expanded_bands == name]
+            )
+            for name in EXPANDED_REPORT_NAMES
+        },
+        "by_rating_band_category": {
+            name: {
+                category: error_summary(
+                    frame.loc[(expanded_bands == name) & (frame["category"] == category)],
+                    predictions[(expanded_bands == name) & (frame["category"] == category)],
+                )
+                for category in categories
+            }
+            for name in EXPANDED_REPORT_NAMES
         },
     }
 

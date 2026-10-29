@@ -29,7 +29,9 @@ class RatingStratifiedPlayerSearch:
         self.connection = connection
         self._edges = connection.config.search_band_edges
         base, remainder = divmod(connection.config.search_max_players, len(self._edges))
-        self._quotas = [base + (index < remainder) for index in range(len(self._edges))]
+        self._quotas = list(connection.config.search_band_quotas) if (
+            connection.config.search_band_quotas is not None
+        ) else [base + (index < remainder) for index in range(len(self._edges))]
         self._reset()
 
     def _reset(self) -> None:
@@ -286,7 +288,34 @@ class RatingStratifiedPlayerSearch:
                 batch.append(self._names[key])
         return batch
 
-    def search(self, seed_username: str | None = None) -> list[str]:
+    def _initialize_seeds(
+        self, seed_username: str | None, seed_usernames: list[str] | None
+    ) -> str:
+        """Reset the graph and register validated starting identities.
+
+        Args:
+            seed_username: Primary seed, or None to use the configured seed.
+            seed_usernames: Additional seeds spanning otherwise disconnected bands.
+
+        Returns:
+            Trimmed primary seed for progress logging.
+        """
+        seed = (
+            self.connection.config.seed_username if seed_username is None else seed_username
+        ).strip()
+        if not seed:
+            raise ValueError("seed_username must not be empty")
+        self._reset()
+        self._register(seed, 0)
+        for additional_seed in seed_usernames or []:
+            if not additional_seed.strip():
+                raise ValueError("seed_usernames must not contain empty usernames")
+            self._register(additional_seed.strip(), 0)
+        return seed
+
+    def search(
+        self, seed_username: str | None = None, *, seed_usernames: list[str] | None = None
+    ) -> list[str]:
         """Return a partial within-quota sample if the expansion budget is exhausted.
 
         Equal quotas differ by at most one; remainder slots go to lower bands.
@@ -295,18 +324,13 @@ class RatingStratifiedPlayerSearch:
 
         Args:
             seed_username: Starting username, or the configured seed.
+            seed_usernames: Optional additional starting players across rating bands.
 
         Returns:
             Unique usernames within rating quotas, possibly a partial sample.
         """
         config = self.connection.config
-        seed = (
-            config.seed_username if seed_username is None else seed_username
-        ).strip()
-        if not seed:
-            raise ValueError("seed_username must not be empty")
-        self._reset()
-        self._register(seed, 0)
+        seed = self._initialize_seeds(seed_username, seed_usernames)
         logger.info(
             "Starting rating-stratified search from %s: %s, %d expansion budget, quotas %s",
             seed,

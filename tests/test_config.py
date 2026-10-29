@@ -21,6 +21,49 @@ from training_data.config import DatasetConfig as CollectionDatasetConfig
 class ConfigTests(unittest.TestCase):
     """Check canonical definitions and independently editable workflow settings."""
 
+    def test_expanded_run_is_isolated_and_covers_requested_ratings(self):
+        """Check the wide-run budget, boundaries and reusable engine contract.
+
+        Args:
+            None.
+
+        Returns:
+            None; coverage and separation from the existing run are asserted.
+        """
+        settings = PipelineConfig.expanded()
+        original = PipelineConfig()
+        blitz = [quota for quota in settings.stratification.quotas if quota.category == "blitz"]
+        self.assertEqual(len(blitz), 14)
+        self.assertEqual((blitz[0].lower, blitz[0].upper), (100, 350))
+        self.assertEqual((blitz[-1].lower, blitz[-1].upper), (3350, 3501))
+        self.assertEqual(sum(quota.rows for quota in settings.stratification.quotas), 28000)
+        self.assertEqual(settings.candidate_games, 60000)
+        self.assertEqual(len(settings.collection.months), 6)
+        self.assertNotEqual(settings.artifact_directory, original.artifact_directory)
+        self.assertNotEqual(settings.analysis_directory, original.analysis_directory)
+        self.assertEqual(settings.engine, original.engine)
+        self.assertEqual(settings.engine_cache_directory, original.engine_cache_directory)
+
+    def test_invalid_discovery_quotas_and_coverage_limits(self):
+        """Reject invalid discovery allocation before network or engine work.
+
+        Args:
+            None.
+
+        Returns:
+            None; mismatched quotas and invalid player thresholds raise errors.
+        """
+        for quotas in ((1,), (1,) * 11, (-1, 101, *([0] * 9))):
+            with self.subTest(quotas=quotas), self.assertRaises(ValueError):
+                DatasetConfig(search_band_quotas=quotas)
+        for overrides in (
+            {"discovery_seed_limit": 0},
+            {"min_training_group_players": -1},
+            {"discovery_seed_usernames": ("",)},
+        ):
+            with self.subTest(overrides=overrides), self.assertRaises(ValueError):
+                PipelineConfig(**overrides)
+
     def test_defaults_match_fast_bundle(self):
         """Use the selected fast search and schema by default.
 
