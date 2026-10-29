@@ -1,20 +1,23 @@
+import json
 import logging
 import time
 from collections import deque
 from collections.abc import Callable, Generator, Iterable, Iterator
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from itertools import islice
 from typing import ParamSpec, TypeVar
 
 from chessdotcom import ChessDotComClient, RateLimitHandler
-from chessdotcom.endpoints.player_games_by_month import Game
+from chessdotcom.endpoints.player_games_by_month import Game, ResponseBuilder
 from chessdotcom.errors import ChessDotComClientError
 from requests.exceptions import ConnectionError, SSLError, Timeout
 from retryable import retry
 
 from elo_model.config import DatasetConfig
+
+from .archive_cache import MonthlyArchiveCache
 
 logger = logging.getLogger(__name__)
 P = ParamSpec("P")
@@ -35,6 +38,10 @@ class ChessComConnection:
             None.
         """
         self.config = config
+        self.archive_cache = (
+            MonthlyArchiveCache(config.archive_cache_directory, config.archive_cache_ttl_seconds)
+            if config.archive_cache_directory is not None else None
+        )
 
         self.client = ChessDotComClient(
             user_agent=config.user_agent,
@@ -84,7 +91,7 @@ class ChessComConnection:
             except ValueError:
                 try:
                     retry_at = parsedate_to_datetime(retry_after)
-                    delay = (retry_at - datetime.now(timezone.utc)).total_seconds()
+                    delay = (retry_at - datetime.now(UTC)).total_seconds()
                 except (ValueError, TypeError, OverflowError):
                     logger.warning("Invalid Retry-After header: %r", retry_after)
                     return True
@@ -205,6 +212,9 @@ class ChessComConnection:
         Returns:
             Archive owner and typed games; raw metadata has a separate API.
         """
+        if self.archive_cache is not None:
+            username, games = self._get_raw_monthly_games(job)
+            return username, ResponseBuilder().build(json.dumps({"games": games})).games
         username, year, month = job
         response = self._request(
             f"player/{username}/games/{year}/{month:02d}",
@@ -236,6 +246,25 @@ class ChessComConnection:
             yield from games
 
     def _get_raw_monthly_games(
+        self, job: tuple[str, int, int]
+    ) -> tuple[str, list[dict]]:
+        """Reuse a shared snapshot before downloading a raw archive.
+
+        Args:
+            job: Username, year and month identifying one archive.
+
+        Returns:
+            Archive owner and raw JSON games, including fields omitted by the SDK.
+        """
+        if self.archive_cache is None:
+            return self._download_raw_monthly_games(job)
+        username, year, month = job
+        games = self.archive_cache.get(
+            username, year, month, lambda: self._download_raw_monthly_games(job)[1],
+        )
+        return username, games
+
+    def _download_raw_monthly_games(
         self, job: tuple[str, int, int]
     ) -> tuple[str, list[dict]]:
         """Retain API fields omitted by the SDK's typed Game, including rated.

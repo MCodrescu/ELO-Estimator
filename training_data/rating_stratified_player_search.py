@@ -3,9 +3,9 @@ from bisect import bisect_right
 from collections import deque
 
 from chessdotcom.endpoints.player_games_by_month import Game
-from tqdm.auto import tqdm
 
 from .chess_com_connection import ChessComConnection
+from .discovery_progress import DiscoveryProgress
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +51,9 @@ class RatingStratifiedPlayerSearch:
         self._queues: list[deque[str]] = [deque() for _ in range(len(self._edges) + 1)]
         self._queued_band: dict[str, int] = {}
         self._expanded: set[str] = set()
+        self._best_retained = 0
+        self._last_improvement = 0
+        self.stop_reason = "not started"
 
     def _label(self, band: int) -> str:
         """Describe one configured rating interval.
@@ -314,6 +317,44 @@ class RatingStratifiedPlayerSearch:
             self._register(additional_seed.strip(), 0)
         return seed
 
+    def _stalled(self) -> bool:
+        """Track retained coverage and bound expansions without improvement.
+
+        Args:
+            None.
+
+        Returns:
+            Whether the configured no-improvement budget has been exhausted.
+        """
+        retained = sum(self.band_counts.values())
+        if retained > self._best_retained:
+            self._best_retained = retained
+            self._last_improvement = self.expanded_count
+        limit = self.connection.config.search_stagnation_expansions
+        return limit is not None and self.expanded_count - self._last_improvement >= limit
+
+    def _accepted_players(self) -> list[str]:
+        """Collect within-quota usernames and report remaining band shortages.
+
+        Args:
+            None.
+
+        Returns:
+            Accepted display usernames in stable rating-band order.
+        """
+        result = [
+            self._names[key]
+            for bucket, quota in zip(self._buckets, self._quotas)
+            for key in list(bucket)[:quota]
+        ]
+        for band, (bucket, quota) in enumerate(zip(self._buckets, self._quotas)):
+            if len(bucket) < quota:
+                logger.warning(
+                    "Unfilled rating band %s: %d/%d usernames",
+                    self._label(band), len(bucket), quota,
+                )
+        return result
+
     def search(
         self, seed_username: str | None = None, *, seed_usernames: list[str] | None = None,
         progress: bool = False,
@@ -327,7 +368,7 @@ class RatingStratifiedPlayerSearch:
         Args:
             seed_username: Starting username, or the configured seed.
             seed_usernames: Optional additional starting players across rating bands.
-            progress: Display archive-budget and retained-username progress bars.
+            progress: Display per-band quotas, remaining usernames and estimated time.
 
         Returns:
             Unique usernames within rating quotas, possibly a partial sample.
@@ -342,18 +383,10 @@ class RatingStratifiedPlayerSearch:
             self.band_quotas,
         )
         reason = "band quotas filled"
-        with (
-            tqdm(
-                total=config.search_max_expansions * len(config.months),
-                desc=f"{config.search_time_class}: archive budget",
-                unit="archive", disable=not progress,
-            ) as archive_bar,
-            tqdm(
-                total=config.search_max_players,
-                desc=f"{config.search_time_class}: rating-band quotas",
-                unit="player", disable=not progress,
-            ) as player_bar,
-        ):
+        with DiscoveryProgress(
+            config.search_time_class, self.band_quotas,
+            config.search_max_expansions * len(config.months), progress,
+        ) as display:
             while any(
                 len(bucket) < quota for bucket, quota in zip(self._buckets, self._quotas)
             ):
@@ -375,26 +408,15 @@ class RatingStratifiedPlayerSearch:
                 for owner, games in self.connection.iter_player_games(batch):
                     for game in games:
                         self._observe(owner, game)
-                    archive_bar.set_postfix(owner=owner, discovered=len(self._names), refresh=False)
-                    archive_bar.update(1)
-                    player_bar.update(sum(self.band_counts.values()) - player_bar.n)
+                    display.update(owner, self.band_counts)
                 logger.info("Rating-band progress: %s", self.band_counts)
-            archive_bar.set_postfix_str(reason)
-            player_bar.set_postfix_str(reason)
+                if self._stalled():
+                    reason = "no rating-quota improvement within stagnation budget"
+                    break
+            display.finish(reason)
 
-        result = [
-            self._names[key]
-            for bucket, quota in zip(self._buckets, self._quotas)
-            for key in list(bucket)[:quota]
-        ]
-        for band, (bucket, quota) in enumerate(zip(self._buckets, self._quotas)):
-            if len(bucket) < quota:
-                logger.warning(
-                    "Unfilled rating band %s: %d/%d usernames",
-                    self._label(band),
-                    len(bucket),
-                    quota,
-                )
+        self.stop_reason = reason
+        result = self._accepted_players()
         logger.info(
             "Stratified search complete: %d accepted, %d discovered, %d expanded; %s",
             len(result),

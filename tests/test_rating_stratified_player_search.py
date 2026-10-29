@@ -18,6 +18,7 @@ from training_data import (
     DatasetConfig,
     RatingStratifiedPlayerSearch,
 )
+from training_data.discovery_progress import DiscoveryProgress
 from training_data.preparation import PlayerPoolBuilder
 
 
@@ -56,6 +57,63 @@ def game(
 
 
 class RatingStratifiedPlayerSearchTests(unittest.TestCase):
+    def test_quota_progress_remaining_counts_and_uncertain_eta(self):
+        """Keep rare-band uncertainty and partial-stop shortages visible.
+
+        Args:
+            None.
+
+        Returns:
+            None; remaining quotas, completion counts and estimated times are checked.
+        """
+        with (
+            patch("training_data.discovery_progress.monotonic", return_value=0) as clock,
+            DiscoveryProgress("blitz", {"bridge": 0, "100-349": 3, "350-599": 3}, 10, False) as display,
+        ):
+            self.assertEqual(len(display.bands), 2)
+            self.assertIn("remaining=6", display.summary.postfix)
+            self.assertIn("unknown (unseen bands)", display.summary.postfix)
+            clock.return_value = 10
+            display.update("Alice", {"100-349": 1, "350-599": 1})
+            self.assertIn("remaining=4", display.summary.postfix)
+            self.assertIn("bands_filled=0/2", display.summary.postfix)
+            self.assertIn("quota_ETA=~00:20", display.summary.postfix)
+            clock.return_value = 20
+            display.update("Bob", {"100-349": 10, "350-599": 2})
+            self.assertIn("remaining=1", display.summary.postfix)
+            self.assertIn("bands_filled=1/2", display.summary.postfix)
+            self.assertIn("quota_ETA=~00:10", display.summary.postfix)
+            clock.return_value = 81
+            display.update("Carol", {"100-349": 3, "350-599": 2})
+            self.assertIn("unknown (quota gains stalled)", display.summary.postfix)
+            display.finish("expansion budget reached")
+            self.assertIn("remaining=1", display.summary.postfix)
+            self.assertIn("quota_ETA=not reached", display.summary.postfix)
+            self.assertIn("stopped=expansion budget reached", display.summary.postfix)
+
+    def test_stagnation_budget_stops_unproductive_bridge_expansions(self):
+        """Keep rare quota gaps visible without exhausting the full search budget.
+
+        Args:
+            None.
+
+        Returns:
+            None; productive discovery resets the bounded no-improvement budget.
+        """
+        search, _ = self.make_search(
+            {
+                "Seed": [game("Seed", 1700, "Bridge1", 1710)],
+                "Bridge1": [game("Bridge1", 1710, "Bridge2", 1720)],
+                "Bridge2": [game("Bridge2", 1720, "Bridge3", 1730)],
+            },
+            search_stagnation_expansions=2,
+        )
+        with self.assertLogs("training_data.rating_stratified_player_search", level="INFO"):
+            result = search.search()
+        self.assertEqual(len(result), 1)
+        self.assertEqual(search.expanded_count, 3)
+        self.assertIn("stagnation budget", search.stop_reason)
+
     def test_progress_counts_archives_and_capped_rating_quotas(self):
         """Count monthly archives separately without overcounting accepted players.
 
@@ -75,18 +133,22 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
         ]
         archive_bar = tqdm(total=2, file=io.StringIO())
         player_bar = tqdm(total=11, file=io.StringIO())
+        band_bars = [tqdm(total=1, file=io.StringIO()) for _ in range(11)]
         with (
-            patch("training_data.rating_stratified_player_search.tqdm", side_effect=[archive_bar, player_bar]) as bars,
+            patch("training_data.discovery_progress.tqdm", side_effect=[player_bar, archive_bar, *band_bars]) as bars,
             self.assertLogs("training_data.rating_stratified_player_search", level="INFO"),
         ):
             result = search.search(progress=True)
         self.assertEqual(len(result), 11)
         self.assertEqual(archive_bar.n, 2)
         self.assertEqual(player_bar.n, 11)
-        self.assertEqual([call.kwargs["total"] for call in bars.call_args_list], [2, 11])
+        self.assertEqual([call.kwargs["total"] for call in bars.call_args_list], [11, 2, *([1] * 11)])
         self.assertTrue(all(not call.kwargs["disable"] for call in bars.call_args_list))
         self.assertTrue(archive_bar.disable)
         self.assertTrue(player_bar.disable)
+        self.assertTrue(all(bar.n == 1 and bar.disable for bar in band_bars))
+        self.assertIn("remaining=0", player_bar.postfix)
+        self.assertIn("bands_filled=11/11", player_bar.postfix)
 
     def test_player_pool_preserves_source_and_reuses_category_checkpoints(self):
         """Reuse searches while allowing new explicit seeds to extend discovery.
@@ -102,6 +164,7 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
         search.band_counts = {"100-349": 1}
         search.band_quotas = {"100-349": 300}
         search.expanded_count = 1
+        search.stop_reason = "frontier exhausted"
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = root / "original.json"
@@ -126,6 +189,12 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
                     {call.args[0].search_time_class for call in connection.call_args_list},
                     {"blitz", "rapid", "bullet"},
                 )
+                self.assertTrue(all(
+                    call.args[0].months == settings.discovery_months
+                    for call in connection.call_args_list
+                ))
+                self.assertEqual(len(settings.discovery_months), 1)
+                self.assertEqual(len(settings.collection.months), 6)
                 changed = replace(settings, discovery_seed_usernames=("Elite",))
                 PlayerPoolBuilder(changed).build(progress=False)
                 self.assertEqual(search.search.call_count, 6)

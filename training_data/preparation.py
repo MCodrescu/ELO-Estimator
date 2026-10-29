@@ -68,8 +68,14 @@ class PlayerPoolBuilder:
             for category in dict.fromkeys(quota.category for quota in settings.stratification.quotas):
                 if category == "classical":
                     continue
-                config = replace(settings.collection, search_time_class=category)
-                signature = fingerprint({"config": asdict(config), "seeds": seeds})
+                config = replace(
+                    settings.collection, search_time_class=category,
+                    months=settings.discovery_months,
+                )
+                search_settings = asdict(config)
+                search_settings.pop("archive_cache_directory")
+                search_settings.pop("archive_cache_ttl_seconds")
+                signature = fingerprint({"config": search_settings, "seeds": seeds})
                 checkpoint = settings.data_directory / f"discovery.{category}.json"
                 saved = json.loads(checkpoint.read_text(encoding="utf-8")) if checkpoint.exists() else {}
                 if saved.get("signature") == signature:
@@ -85,6 +91,8 @@ class PlayerPoolBuilder:
                         "band_counts": search.band_counts,
                         "band_quotas": search.band_quotas,
                         "expanded_players": search.expanded_count,
+                        "months": [list(month) for month in config.months],
+                        "stop_reason": search.stop_reason,
                     })
                 names = list(dict.fromkeys([*names, *(name.casefold() for name in discovered)]))
                 write_json(settings.usernames_path, names)

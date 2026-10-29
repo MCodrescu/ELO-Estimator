@@ -1,9 +1,11 @@
 """Shared API transport tests, independent of model representation."""
 
 import json
+import tempfile
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from threading import Barrier, Event, Lock
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -11,12 +13,113 @@ from unittest.mock import Mock, patch
 from chessdotcom.errors import ChessDotComClientError
 from requests.exceptions import ConnectionError, SSLError, Timeout
 
+from elo_model.storage import write_json
 from training_data import ChessComConnection, DatasetConfig
+from training_data.archive_cache import MonthlyArchiveCache
 from training_data.chess_com_connection import logger
 
 
 class ConnectionTests(unittest.TestCase):
     """Retain transport, retry, ordering and concurrency regression coverage."""
+
+    def test_archive_cache_refreshes_active_month_but_keeps_history(self):
+        """Expire active snapshots without redownloading completed months.
+
+        Args:
+            None.
+
+        Returns:
+            None; cache freshness and historical reuse are asserted.
+        """
+        now = datetime(2026, 10, 29, tzinfo=UTC)
+        fetch = Mock(return_value=[{"rated": True}])
+        with tempfile.TemporaryDirectory() as directory:
+            cache = MonthlyArchiveCache(Path(directory), ttl_seconds=60)
+            with patch("training_data.archive_cache.datetime") as clock:
+                clock.now.return_value = now
+                cache.get("Alice", 2026, 10, fetch)
+                cache.get("Alice", 2026, 9, fetch)
+                cache.get("alice", 2026, 10, fetch)
+                self.assertEqual(fetch.call_count, 2)
+                clock.now.return_value = now + timedelta(seconds=61)
+                cache.get("Alice", 2026, 10, fetch)
+                cache.get("Alice", 2026, 9, fetch)
+                self.assertEqual(fetch.call_count, 3)
+
+    def test_archive_cache_recovers_invalid_snapshot(self):
+        """Replace invalid snapshots with a fresh validated archive.
+
+        Args:
+            None.
+
+        Returns:
+            None; invalid data is logged and downloaded again.
+        """
+        fetch = Mock(return_value=[{"rated": True}])
+        with tempfile.TemporaryDirectory() as directory:
+            cache = MonthlyArchiveCache(Path(directory), ttl_seconds=60)
+            cache.get("Alice", 2020, 1, fetch)
+            path = next(Path(directory).rglob("*.json"))
+            write_json(path, {"invalid": "snapshot"})
+            with self.assertLogs("training_data.archive_cache", level="WARNING"):
+                self.assertEqual(cache.get("Alice", 2020, 1, fetch), [{"rated": True}])
+            self.assertEqual(fetch.call_count, 2)
+
+    def test_archive_cache_serializes_duplicate_requests(self):
+        """Download a shared archive once across concurrent cache instances.
+
+        Args:
+            None.
+
+        Returns:
+            None; simultaneous callers share a single download.
+        """
+        start = Barrier(2)
+        fetch = Mock(return_value=[{"rated": True}])
+        with tempfile.TemporaryDirectory() as directory:
+            def load_archive():
+                """Start a cache request alongside another worker.
+
+                Args:
+                    None.
+
+                Returns:
+                    Raw games from the shared archive.
+                """
+                start.wait(timeout=5)
+                return MonthlyArchiveCache(Path(directory), 60).get("Alice", 2020, 1, fetch)
+
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                futures = [pool.submit(load_archive) for _ in range(2)]
+                self.assertEqual([future.result() for future in futures], [[{"rated": True}]] * 2)
+            fetch.assert_called_once()
+
+    def test_archive_cache_shares_typed_discovery_and_raw_training(self):
+        """Download an archive once across callers without dropping raw labels.
+
+        Args:
+            None.
+
+        Returns:
+            None; cache reuse, normalized identities and rated metadata are checked.
+        """
+        source = {
+            "rated": True, "time_class": "blitz", "rules": "chess", "end_time": 1,
+            "white": {"username": "Alice", "rating": 1200},
+            "black": {"username": "Bob", "rating": 1300},
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            config = DatasetConfig(
+                months=((2020, 1),), request_delay=0,
+                archive_cache_directory=Path(directory),
+            )
+            with patch("chessdotcom.client.requests.get") as get:
+                get.return_value = Mock(status_code=200, text=json.dumps({"games": [source]}))
+                typed = list(ChessComConnection(config).iter_games("Alice"))
+                raw = list(ChessComConnection(config).iter_raw_player_games(["alice"]))
+            self.assertEqual(get.call_count, 1)
+            self.assertEqual(typed[0].white.rating, 1200)
+            self.assertIs(raw[0][1][0]["rated"], True)
 
     def test_connection_uses_config_and_preserves_player_order(self):
         """Check client configuration and deduplicated player order.
@@ -398,7 +501,7 @@ class ConnectionTests(unittest.TestCase):
                 patch("training_data.chess_com_connection.datetime") as clock,
                 self.assertLogs("retryable.retry", level="WARNING"),
             ):
-                clock.now.return_value = datetime(2026, 1, 1, tzinfo=timezone.utc)
+                clock.now.return_value = datetime(2026, 1, 1, tzinfo=UTC)
                 self.assertEqual(connection.get_players(), ["Alice"])
             self.assertEqual([call.args[0] for call in sleep.call_args_list], [7, 5])
 

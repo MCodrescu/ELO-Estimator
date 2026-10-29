@@ -57,6 +57,29 @@ category search. An interrupted category restarts; completed unchanged searches
 are reused. Discovery itself can require many archive requests and respects
 the existing proxy, retry and request-delay settings.
 
+Discovery progress puts quota completion first: accepted/target usernames,
+remaining usernames, filled/total bands, and a separate bar for each rating band.
+Quota ETA is a rough extrapolation from the slowest unfinished band's observed
+acceptance rate, not a guaranteed finish time. It is unknown for unseen bands or
+after a minute without net quota gains. Archive-budget ETA is labeled separately;
+budget or stagnation stops leave unmet quotas visible rather than showing 100%.
+
+Expanded discovery now uses only the newest configured collection month, while
+training collection retains all six months. Raw monthly archives are shared
+between discovery categories and training through `data/archive_cache`.
+Completed historical months are reused; current-month snapshots refresh after
+one hour. Duplicate requests within the same process share a per-archive lock.
+Each category also stops after 500 player expansions without improved retained
+quota coverage, saving its partial results and stop reason. Training quotas and
+request concurrency are unchanged.
+
+If coverage needs older discovery data, set `discovery_month_limit=2` (or `None`
+for every collection month) in the Cell 1 settings. To disable the stall limit,
+replace the collection settings with `search_stagnation_expansions=None`.
+Changing discovery settings reruns the affected searches but reuses raw archives.
+Restart the kernel and rerun Cells 1-2 to load these changes; the new archive
+budget is 3,000 per category rather than 18,000 before cache reuse or early stops.
+
 To improve coverage or add known active high/low-rated players, edit Cell 1:
 
 ```python

@@ -56,6 +56,7 @@ class DatasetConfig:
     search_max_depth: int | None = None
     search_time_class: str = "blitz"
     search_max_expansions: int = 1000
+    search_stagnation_expansions: int | None = None
     search_band_edges: tuple[int, ...] = tuple(range(0, 2501, 250))
     search_band_quotas: tuple[int, ...] | None = None
 
@@ -66,6 +67,8 @@ class DatasetConfig:
     retry_backoff: float = 2.0
     retries: int = 2
     max_workers: int = 4
+    archive_cache_directory: Path | None = None
+    archive_cache_ttl_seconds: float = 3600
 
     log_level: str = "INFO"
     log_format: str = "%(asctime)s %(levelname)s [%(threadName)s] %(message)s"
@@ -141,6 +144,12 @@ class DatasetConfig:
 
         if invalid_budget or self.search_max_expansions < 1:
             raise ValueError("search_max_expansions must be a positive integer")
+        if self.search_stagnation_expansions is not None and (
+            isinstance(self.search_stagnation_expansions, bool)
+            or not isinstance(self.search_stagnation_expansions, int)
+            or self.search_stagnation_expansions < 1
+        ):
+            raise ValueError("search_stagnation_expansions must be a positive integer or None")
 
         if (
             len(self.search_band_edges) < 2
@@ -192,6 +201,11 @@ class DatasetConfig:
 
         if self.max_workers < 1:
             raise ValueError("max_workers must be positive")
+        if (
+            not math.isfinite(self.archive_cache_ttl_seconds)
+            or self.archive_cache_ttl_seconds <= 0
+        ):
+            raise ValueError("archive_cache_ttl_seconds must be finite and positive")
 
         if self.log_level not in ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"):
             raise ValueError(
@@ -502,6 +516,7 @@ class PipelineConfig:
     discovery_enabled: bool = False
     discovery_seed_usernames: tuple[str, ...] = ()
     discovery_seed_limit: int = 200
+    discovery_month_limit: int | None = None
     min_training_group_players: int = 0
     min_holdout_group_players: int = 0
 
@@ -563,6 +578,7 @@ class PipelineConfig:
             artifact_directory=Path("artifacts/rating_model_expanded"),
             training_directory=Path("runs/expanded"),
             discovery_enabled=True,
+            discovery_month_limit=1,
             min_training_group_players=100,
             min_holdout_group_players=20,
             collection=DatasetConfig(
@@ -572,6 +588,8 @@ class PipelineConfig:
                 search_band_quotas=(0, *(300 for _ in range(14)), 0),
                 search_max_players=4200,
                 search_max_expansions=3000,
+                search_stagnation_expansions=500,
+                archive_cache_directory=Path("data/archive_cache"),
                 log_level="WARNING",
             ),
             stratification=StratificationConfig(
@@ -625,6 +643,24 @@ class PipelineConfig:
             raise ValueError("discovery_seed_limit must be a positive integer")
         if any(not isinstance(name, str) or not name.strip() for name in self.discovery_seed_usernames):
             raise ValueError("discovery_seed_usernames must contain nonempty strings")
+        if self.discovery_month_limit is not None and (
+            isinstance(self.discovery_month_limit, bool)
+            or not isinstance(self.discovery_month_limit, int)
+            or self.discovery_month_limit < 1
+        ):
+            raise ValueError("discovery_month_limit must be a positive integer or None")
+
+    @property
+    def discovery_months(self) -> tuple[tuple[int, int], ...]:
+        """Choose recent discovery months independently of training collection.
+
+        Args:
+            None.
+
+        Returns:
+            Newest configured months up to the optional discovery limit.
+        """
+        return tuple(sorted(self.collection.months, reverse=True)[:self.discovery_month_limit])
 
     @property
     def candidate_games(self) -> int:
