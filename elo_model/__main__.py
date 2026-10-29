@@ -21,7 +21,7 @@ from .config import (
     TrainingConfig,
 )
 from .evaluation import BAND_NAMES, rating_bands
-from .feature_schema import FEATURE_NAMES
+from .feature_schema import feature_schema
 from .game import GameInput
 from .pipeline import (
     analyze_dataset,
@@ -155,13 +155,14 @@ def run_analyze(args):
     """Run the explicitly requested expensive engine stage.
 
     Args:
-        args: Split manifest, executable, fixed-depth settings and cache paths.
+        args: Split manifest, executable, timed search settings and cache paths.
 
     Returns:
         None; writes resumable analyzed-game and engine metadata artifacts.
     """
     config = EngineConfig(
-        args.stockfish, args.depth, threads=args.threads, hash_mb=args.hash_mb
+        args.stockfish, args.depth, threads=args.threads, hash_mb=args.hash_mb,
+        time_seconds=args.time_seconds, nodes=args.nodes,
     )
     games = pd.read_parquet(args.input)
     analyze_dataset(games, config, args.cache, args.output, workers=args.workers)
@@ -180,12 +181,12 @@ def run_features(args):
     games = pd.read_parquet(args.input)
     metadata = read_json(Path(args.input).with_suffix(".engine.json"))
     config = FeatureConfig(**read_json(args.config)) if args.config else FeatureConfig()
-    frame = extract_dataset(games, args.cache, config)
+    frame = extract_dataset(games, args.cache, config, engine_metadata=metadata)
     save_feature_dataset(frame, args.output, metadata, config)
     write_json(
-        Path(args.output).with_suffix(".missingness.json"), feature_missingness(frame)
+        Path(args.output).with_suffix(".missingness.json"), feature_missingness(frame, config.schema_version)
     )
-    print(f"Extracted {len(frame)} rows with {len(FEATURE_NAMES)} features")
+    print(f"Extracted {len(frame)} rows with {len(feature_schema(config.schema_version).names)} features")
 
 
 def run_train(args):
@@ -209,7 +210,7 @@ def run_train(args):
         balance_players=args.balance_players,
         threads=args.threads,
     )
-    result = ModelTrainer(config).fit(frame)
+    result = ModelTrainer(config, FeatureConfig(**metadata["feature_config"])).fit(frame)
     result.metadata.update(metadata)
     sample = export_sample(frame, result.models)
     verification = export_bundle(
@@ -273,7 +274,7 @@ def run_predict(args):
     if args.features:
         frame = pd.read_parquet(args.features)
         predictions = predictor.predict(
-            frame.loc[:, list(FEATURE_NAMES)], frame["category"].tolist()
+            frame.loc[:, list(predictor.schema.names)], frame["category"].tolist()
         )
         result = predictions.tolist()
     else:
@@ -333,12 +334,14 @@ def parser() -> argparse.ArgumentParser:
     split.set_defaults(handler=run_split)
 
     analyze = commands.add_parser(
-        "analyze", help="Run or resume fixed-depth Stockfish analysis"
+        "analyze", help="Run or resume timed single-PV Stockfish analysis"
     )
     analyze.add_argument("--input", default=str(CLI_CONFIG.split_path))
     analyze.add_argument("--output", default=str(CLI_CONFIG.analyzed_path))
     analyze.add_argument("--stockfish", required=True)
-    analyze.add_argument("--depth", type=int, default=CLI_CONFIG.engine.depth)
+    analyze.add_argument("--depth", type=int, help="Optional additional depth cap")
+    analyze.add_argument("--time-seconds", type=float, default=CLI_CONFIG.engine.time_seconds)
+    analyze.add_argument("--nodes", type=int)
     analyze.add_argument("--threads", type=int, default=CLI_CONFIG.engine.threads)
     analyze.add_argument("--hash-mb", type=int, default=CLI_CONFIG.engine.hash_mb)
     analyze.add_argument(

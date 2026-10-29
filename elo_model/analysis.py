@@ -1,4 +1,4 @@
-"""Fixed-depth Stockfish analysis and history-aware resumable Parquet cache."""
+"""Contract-bound Stockfish analysis and history-aware resumable Parquet cache."""
 
 import asyncio
 import hashlib
@@ -12,7 +12,7 @@ import chess.engine
 import pandas as pd
 from tqdm.auto import tqdm
 
-from .config import ANALYSIS_VERSION, EngineConfig
+from .config import ANALYSIS_VERSION, CACHE_VERSION, CLEAR_HASH_OPTION, EngineConfig
 from .game import Candidate, GameInput, PositionAnalysis, Score
 from .storage import write_parquet
 
@@ -46,7 +46,7 @@ def analysis_from_payload(payload: list[dict]) -> list[PositionAnalysis]:
             Candidate(
                 move=item["move"],
                 score=Score(**item["score"]),
-                depth=item.get("depth", 12),
+                depth=item.get("depth", 0),
                 lowerbound=item.get("lowerbound", False),
                 upperbound=item.get("upperbound", False),
             )
@@ -56,10 +56,7 @@ def analysis_from_payload(payload: list[dict]) -> list[PositionAnalysis]:
             PositionAnalysis(
                 fen=position["fen"],
                 candidates=candidates,
-                played_score=Score(**position["played_score"])
-                if position.get("played_score")
-                else None,
-                depth=position.get("depth", 12),
+                depth=position.get("depth", 0),
                 evaluation=Score(**position["evaluation"])
                 if position.get("evaluation")
                 else None,
@@ -95,7 +92,7 @@ class AnalysisCache:
         """
         return fingerprint(
             {
-                "version": ANALYSIS_VERSION,
+                "version": CACHE_VERSION,
                 "initial_fen": game.initial_fen,
                 "moves": game.moves,
                 "engine": engine_metadata,
@@ -149,7 +146,7 @@ class AnalysisCache:
 
 
 class StockfishAnalyzer:
-    """Analyze every reached board, adding a root-restricted score when needed."""
+    """Search each reached board once with game-local hash retention."""
 
     def __init__(self, config: EngineConfig, cache: AnalysisCache):
         """Prepare an adapter; enter its context to launch Stockfish.
@@ -204,6 +201,14 @@ class StockfishAnalyzer:
             "settings": settings,
             "analysis_version": ANALYSIS_VERSION,
         }
+        self.metadata.update({
+            "initialization": "clear-hash-per-game",
+            "position_order": "initial-then-reached-chronological-full-history",
+            "uci_defaults": {
+                name: option.default for name, option in self.engine.options.items()
+                if name not in (CLEAR_HASH_OPTION, "Threads", "Hash", "MultiPV")
+            },
+        })
         return self
 
     def __exit__(self, exception_type, exception, traceback):
@@ -239,17 +244,14 @@ class StockfishAnalyzer:
             mate = 1 if score.score(mate_score=10000) > 0 else -1
         return Score(mate=mate)
 
-    def _position(
-        self, board: chess.Board, played_move: str | None
-    ) -> PositionAnalysis:
-        """Analyze one root, including the played move outside its top three.
+    def _position(self, board: chess.Board) -> PositionAnalysis:
+        """Analyze one root within its total search allowance.
 
         Args:
             board: Position with full history retained for repetition rules.
-            played_move: Next played UCI move, or None after the final move.
 
         Returns:
-            Ranked analysis and an exact played score, or terminal outcome.
+            Exact single-PV evaluation or terminal outcome.
         """
         outcome = board.outcome(claim_draw=False)
         if outcome is not None:
@@ -257,47 +259,49 @@ class StockfishAnalyzer:
             if outcome.winner is not None:
                 evaluation = Score(mate=1 if outcome.winner else -1)
             return PositionAnalysis(
-                board.fen(), (), depth=self.config.depth, evaluation=evaluation
+                board.fen(), (), depth=0, evaluation=evaluation
             )
-        if "Clear Hash" in self.engine.options:
-            self.engine.configure({"Clear Hash": None})
-        infos = self.engine.analyse(
-            board,
-            chess.engine.Limit(depth=self.config.depth),
-            multipv=self.config.multipv,
+        limit = chess.engine.Limit(
+            depth=self.config.depth, time=self.config.time_seconds,
+            nodes=self.config.nodes,
         )
+        infos = self._bounded_infos(board, limit)
         candidates = tuple(
             Candidate(
                 info["pv"][0].uci(),
                 self._score(info),
-                info.get("depth", self.config.depth),
+                info.get("depth", 0),
                 info.get("lowerbound", False),
                 info.get("upperbound", False),
             )
             for info in infos
         )
-        played = next(
-            (
-                candidate.score
-                for candidate in candidates
-                if candidate.move == played_move
-            ),
-            None,
-        )
-        if played_move is not None and played is None:
-            info = self.engine.analyse(
-                board,
-                chess.engine.Limit(depth=self.config.depth),
-                root_moves=[chess.Move.from_uci(played_move)],
-            )
-            if info.get("lowerbound") or info.get("upperbound"):
-                raise ValueError(
-                    "Played-move analysis returned a bound instead of an exact score"
-                )
-            played = self._score(info)
         return PositionAnalysis(
-            board.fen(), candidates, played, self.config.depth, candidates[0].score
+            board.fen(), candidates, candidates[0].depth, candidates[0].score
         )
+
+    def _bounded_infos(self, board: chess.Board, limit: chess.engine.Limit) -> list[dict]:
+        """Keep the last complete exact iteration within a single bounded search.
+
+        Args:
+            board: Root with complete repetition history.
+            limit: Total time/depth/node allowance for this reached position.
+
+        Returns:
+            Exact ranked scores at one completed depth; no synthesized candidates.
+        """
+        latest = None
+        with self.engine.analysis(board, limit, multipv=self.config.multipv) as stream:
+            for info in stream:
+                if not info.get("pv") or "score" not in info or "depth" not in info:
+                    continue
+                if info.get("lowerbound") or info.get("upperbound"):
+                    continue
+                if info.get("multipv", 1) == 1 and (latest is None or info["depth"] >= latest["depth"]):
+                    latest = info
+        if latest is not None:
+            return [latest]
+        raise ValueError("Search budget produced no complete exact candidate iteration")
 
     def analyze(
         self, game: GameInput, progress: bool = False
@@ -318,6 +322,9 @@ class StockfishAnalyzer:
         if cached is not None:
             self.cache_hits += 1
             return key, cached
+        if CLEAR_HASH_OPTION not in self.engine.options:
+            raise ValueError("Game-local hash policy requires Clear Hash support")
+        self.engine.configure({CLEAR_HASH_OPTION: None})
         boards = tqdm(
             game.boards(),
             desc="Stockfish positions",
@@ -325,12 +332,7 @@ class StockfishAnalyzer:
             disable=not progress,
             leave=False,
         )
-        result = [
-            self._position(
-                board, game.moves[index] if index < len(game.moves) else None
-            )
-            for index, board in enumerate(boards)
-        ]
+        result = [self._position(board) for board in boards]
         self.cache.save(key, result)
         self.analyzed_games += 1
         return key, result

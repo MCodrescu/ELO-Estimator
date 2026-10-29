@@ -115,11 +115,12 @@ def sample_weights(
     return weights / weights.mean()
 
 
-def grouped_importance(booster) -> dict:
+def grouped_importance(booster, groups: dict | None = None) -> dict:
     """Sum tree gain and split counts by the versioned feature groups.
 
     Args:
         booster: Trained native LightGBM booster with saved feature names.
+        groups: Feature groups for the selected schema; legacy groups by default.
 
     Returns:
         Per-group gain, gain fraction and split counts.
@@ -136,5 +137,5 @@ def grouped_importance(booster) -> dict:
             else 0.0,
             "splits": int(sum(splits[name] for name in features)),
         }
-        for group, features in FEATURE_GROUPS.items()
+        for group, features in (groups if groups is not None else FEATURE_GROUPS).items()
     }

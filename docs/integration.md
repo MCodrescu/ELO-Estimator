@@ -1,144 +1,116 @@
-# Reusing a Model
+# Integration
 
-Install the Python package and deploy a compatible model bundle separately. The
-package contains inference code, not trained weights or a Stockfish executable.
-Code and model versions are independent; pin both in the consuming application.
+## Package and Weights
 
-The current bundle is tracked in `artifacts/rating_model`. Copy all five files
-from a pinned checkout, including the native model, manifest, feature names/groups,
-and evaluation report. Installing the wheel or Git-based Python dependency does
-not install these weights; they must be deployed separately. The current manifest
-records a Windows Stockfish fingerprint. Exact matching remains the default;
-Linux deployments can opt into the same-release cross-build policy described below.
+Use package **0.2.0** from a pinned repository commit or a wheel built from that
+commit. It is not published on PyPI. Install `.[engine]` from a checkout for cached
+PGN analysis, or the base package for supplied-analysis prediction. The `train`
+extra is only needed for offline collection and training.
 
-## Installation
+Deploy all five files from `artifacts/rating_model` separately from the package:
+`pooled.txt`, `model_manifest.json`, `feature_names.json`, `feature_groups.json`
+and `evaluation.json`. Verify checksums and load only trusted local files.
+The selected model version is `rating-fast-v2`, schema 2 with 93 inputs.
 
-From a checkout, install `pip install ".[engine]"` for PGN analysis with the
-persistent Parquet cache, or `pip install .` for supplied-analysis/feature-only
-prediction. Other repositories can install a built wheel or pin a Git commit:
+The current weights used 45 training, 30 validation and 23 test player rows.
+Test MAE is 606.6 and RMSE 732.8. The speed/accuracy tradeoff was explicitly
+accepted; full-data retraining remains pending. The manifest and evaluation
+describe the actual weights, not a production accuracy guarantee.
 
-```text
-chess-rating-estimator[engine] @ git+https://github.com/MCodrescu/ELO-Estimator.git@<commit-sha>
-```
-
-Replace the placeholder with a real commit or published tag. This project is not
-yet published on PyPI. The base install excludes Optuna, scikit-learn, and the
-Chess.com SDK. Training/collection CLI stages require the `train` extra;
-`chesscom` adds just the existing collection client. These examples were tested
-on Python 3.13; package metadata permits Python 3.11 and newer.
-
-## Predict a PGN
+## Analyze Once
 
 ```python
-from elo_model.config import InferenceConfig
+from dataclasses import asdict
+
+from elo_model.analysis import AnalysisCache, StockfishAnalyzer
+from elo_model.config import EngineConfig, InferenceConfig
+from elo_model.game import GameInput
 from elo_model.inference import RatingEstimator
 
 estimator = RatingEstimator(InferenceConfig(
-    model_directory="/srv/models/rating-v1",
-    engine_executable="/opt/stockfish/stockfish",
-    cache_directory="/srv/cache/chess-analysis",
-   engine_compatibility="same-release",
+    model_directory="artifacts/rating_model",
 ))
-
-estimate = estimator.predict_pgn(pgn_text)
-result = estimate.model_dump(mode="json")
-```
-
-Load the estimator once per worker process and reuse it. Construction loads models
-but starts no engine and makes no network requests. Raw PGN prediction starts an
-engine for that call and reuses complete cached evaluations. The result contains
-`white`, `black`, a content-derived `model_id`, optional `model_version`, time
-`category`, `analysis_key`, `cache_hit`, the chosen `engine_compatibility`, and actual
-runtime `engine_metadata`. Ratings are estimates, not calibrated
-confidence intervals or official rating updates.
-
-For a Chess.com API game object, pass `game_record["pgn"]` to the same method.
-Retrieval stays outside inference so applications can supply their own HTTP,
-retry, proxy, authentication, and game-selection policies. The package also
-retains `training_data.ChessComConnection` for optional collection workflows.
-
-Raw analysis uses the depth, MultiPV, thread count, and hash size recorded in the
-bundle. `engine_compatibility="exact"` requires all engine metadata to match training.
-Opt into `"same-release"` to reuse Windows-trained weights with a Linux build:
-only the binary SHA-256 may differ. The engine identity, analysis protocol version,
-depth, MultiPV, threads, hash size, and all other recorded metadata must still match.
-This applies to both raw PGNs and supplied analysis. Lower-level callers can use
-`RatingPredictor.predict_game(..., engine_compatibility="same-release")`; the CLI
-equivalent is `predict --engine-compatibility same-release`.
-
-No retraining is required to enable the policy. It permits cross-build inference;
-it does not certify equivalent features or accuracy. Match evaluation networks and
-other unrecorded engine options, then compare predictions on representative games
-before production use. Engine identity alone cannot verify the NNUE network.
-Runtime metadata is never rewritten, and cache keys still include the actual
-binary fingerprint, keeping Windows and Linux evaluations separate.
-
-## Reuse Existing Analysis
-
-```python
-from elo_model.analysis import analysis_from_payload
-
-estimate = estimator.predict_pgn(
-    pgn_text,
-    analysis=analysis_from_payload(payload["positions"]),
-    engine_metadata=payload["engine"],
+game = GameInput.from_pgn(pgn_text)
+engine_config = EngineConfig(
+    executable="/path/to/compatible/stockfish",
+    **estimator.predictor.manifest["engine"]["settings"],
 )
+with StockfishAnalyzer(engine_config, AnalysisCache("data/review-cache")) as analyzer:
+    estimator.predictor.validate_engine_metadata(analyzer.metadata)
+    analysis_key, positions = analyzer.analyze(game)
+    engine_metadata = analyzer.metadata
+
+graph = [asdict(position.evaluation) for position in positions]
+measurements = estimator.predictor.extractor.measurements(game, positions)
+estimate = estimator.predict_pgn(
+    pgn_text, analysis=positions, engine_metadata=engine_metadata,
+)
+payload = {
+    "engine": engine_metadata,
+    "positions": [asdict(position) for position in positions],
+}
 ```
 
-When supplying analysis, only `model_directory` is required in `InferenceConfig`.
-The engine is not launched. Payload positions must match the initial board and
-every reached board, including exact played-move scores outside the top three.
-Cache fields are `None` when the service did not perform the cache lookup.
+The supplied-analysis prediction launches no engine. Reload serialized positions
+with `elo_model.analysis.analysis_from_payload(payload["positions"])` and retain
+the original `payload["engine"]` as provenance.
 
-For already extracted features, use `elo_model.predictor.RatingPredictor.predict`.
-DataFrame columns must exactly match the exported feature order; separate-category
-models also require a category per row. Reuse this package's extractor rather than
-reimplementing approximately equivalent features.
+Measurements include mover-relative probability loss, centipawn loss, best-move
+match and phase. A simple per-player accuracy proxy is 100 times one minus the
+mean probability loss over that player's moves. It is not Chess.com's accuracy
+formula, calibrated WDL, or a separately validated accuracy model. Ratings are
+post-game playing-strength estimates, not official Elo updates.
 
-## Django Integration
+For raw PGNs without review output, set `engine_executable` and `cache_directory`
+in `InferenceConfig`, then call `predict_pgn(pgn_text)`. Every search setting is
+derived from the loaded bundle.
 
-No separate HTTP model server is required. Configure explicit deployment paths in
-your Django settings:
+## Exact Contract
 
-```python
-RATING_MODEL_DIRECTORY = "/srv/models/rating-v1"
-RATING_STOCKFISH_EXECUTABLE = "/opt/stockfish/stockfish"
-RATING_ANALYSIS_CACHE = "/srv/cache/chess-analysis"
-```
+The current bundle requires Stockfish 19 with `depth=None`, `nodes=None`,
+`time_seconds=0.1`, `multipv=1`, `threads=1`, `hash_mb=64`,
+`hash_reset="game"`, and `played_move_scoring="next-position"`.
 
-Create the estimator lazily in a worker-local application service. Run game
-retrieval and `predict_pgn` in a background task, then persist its JSON result.
-Return a job identifier from the web request instead of holding a request open
-during Stockfish analysis. Limit task concurrency to available engine CPU/memory;
-eight web tasks do not share the notebook's eight-engine pool automatically.
-Use a persistent writable cache and a read-only, trusted model directory.
+Each nonterminal reached position gets one UCI search. Streaming retains the last
+completed exact iteration; interrupted bounded scores are ignored. If no exact
+iteration completes, analysis raises an error rather than synthesizing scores or
+starting a fallback search. Startup, scheduling, communication and cache I/O are
+outside the allowance. It is not a hard end-to-end wall-clock guarantee.
 
-Treat invalid PGNs, unsupported model categories, and incompatible engine/schema
-errors as validation failures rather than silently returning fallback ratings.
-Do not retrain in the Django process. Deploy a new immutable model directory for
-each release and restart workers when switching versions.
+For move index `i`, compare the best score at position `i` with the evaluation
+of reached position `i+1`, even when the played move matches the root PV. Scores
+remain White-relative before conversion to the mover's perspective. Adjacent
+root searches differ in horizon and achieved depth, so this is not equivalent to
+root-restricted analysis. Negative losses are clamped to zero.
 
-## Releasing Weights
+Replay preserves history from the PGN's initial board. Checkmate uses the signed
+mate endpoint; automatic draws use zero centipawns. Claimable threefold and
+50-move draws are not automatically claimed. Resignation/timeout/result headers
+do not replace a nonterminal engine evaluation. History before a custom initial
+FEN cannot be reconstructed.
 
-1. Train and evaluate in the intended serving engine environment. Record held-out
-   metrics, rating/time-category coverage, and single-game limitations.
-2. Export a verified bundle with a release label:
+Clear hash before every uncached game and retain it only across that game's
+chronological positions. Do not warm the hash with another game or parallelize
+positions within a game. Training and inference use the same initialization.
 
-   ```text
-   python -m elo_model export --source runs/latest --output artifacts/rating-v1 --sample-features data/notebook/features.parquet --model-version rating-v1
-   ```
+Exact compatibility is the default: actual engine identity, binary SHA-256,
+UCI defaults, analysis version and all search settings must match. Cache keys
+include the actual binary and complete contract. The explicit `same-release`
+policy ignores only the binary hash; it does not certify Linux parity or retained
+accuracy. The shipped bundle records a Windows engine. Timed search can reach
+different depths on different hardware or under load despite identical metadata.
 
-   Use the actual training run path. Notebook-trained models already live in the
-   configured artifact directory and can also be exported with `export_bundle`.
-   The export CLI needs the `train` extra, not just the inference dependencies.
-3. Package the complete directory: native model text files, model manifest,
-   feature names/groups, and evaluation report. Exclude raw games and engine cache.
-4. Publish the archive and SHA-256 checksum as GitHub Release assets, together with
-   the compatible package commit/version and engine build requirements. Consumers
-   must verify the archive checksum before extracting trusted files.
-5. Choose and publish appropriate code/model licenses after confirming ownership
-   and redistribution rights. No open-source license is granted merely by package
-   metadata or making the repository public.
+## Deployment and Retraining
 
-The library does not automatically download models, extract archives, or update
-weights. Release hosting, licensing, and deployment remain explicit steps.
+Load the estimator once per worker. Run engine work in background tasks and bound
+task concurrency by CPU and memory. Keep the model directory read-only and use a
+persistent writable cache. An analyzer is sequential and must not be shared by
+simultaneous jobs. Invalid PGNs, missing scores and incompatible metadata are
+explicit errors; never silently substitute other weights or search settings.
+
+Train only in the notebook or offline CLI, never inside the consuming application.
+Restart the notebook kernel after upgrading, then run cells in order. New runs
+reuse raw games while keeping fast feature files separate. Export into a new
+immutable directory for each release, verify held-out MAE/RMSE by rating band and
+category, and restart application workers when changing bundles. A changed
+analysis contract requires compatible features, retraining and evaluation.

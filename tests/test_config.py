@@ -21,6 +21,24 @@ from training_data.config import DatasetConfig as CollectionDatasetConfig
 class ConfigTests(unittest.TestCase):
     """Check canonical definitions and independently editable workflow settings."""
 
+    def test_defaults_match_fast_bundle(self):
+        """Use the selected fast search and schema by default.
+
+        Args:
+            None.
+
+        Returns:
+            None; fast search settings and schema are asserted.
+        """
+        fast = PipelineConfig()
+        self.assertIsNone(fast.engine.depth)
+        self.assertEqual(fast.engine.time_seconds, 0.1)
+        self.assertEqual(fast.engine.multipv, 1)
+        self.assertEqual(fast.engine.hash_reset, "game")
+        self.assertEqual(fast.engine.played_move_scoring, "next-position")
+        self.assertEqual(fast.features.schema_version, 2)
+        self.assertEqual(fast.artifact_directory, Path("artifacts/rating_model"))
+
     def test_stratification_validation_and_candidate_budget(self):
         """Validate rating/category quotas without changing engine fingerprints.
 
@@ -69,10 +87,14 @@ class ConfigTests(unittest.TestCase):
             asdict(EngineConfig("stockfish")),
             {
                 "executable": "stockfish",
-                "depth": 12,
-                "multipv": 3,
+                "depth": None,
+                "multipv": 1,
                 "threads": 1,
                 "hash_mb": 64,
+                "time_seconds": 0.1,
+                "nodes": None,
+                "hash_reset": "game",
+                "played_move_scoring": "next-position",
             },
         )
 

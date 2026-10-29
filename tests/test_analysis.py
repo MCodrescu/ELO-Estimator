@@ -4,8 +4,8 @@ import asyncio
 import sys
 import tempfile
 import unittest
-from dataclasses import replace
-from pathlib import Path
+from contextlib import nullcontext
+from dataclasses import asdict, replace
 from unittest.mock import Mock, patch
 
 import chess.engine
@@ -16,6 +16,129 @@ from tests.test_features import PGN, sample_analysis
 
 
 class AnalysisTests(unittest.TestCase):
+    def test_every_contract_setting_invalidates_cache(self):
+        """Keep limits, resource settings and scoring policies in cache identity.
+
+        Args:
+            None.
+
+        Returns:
+            None; changing any behavior-affecting field produces a different key.
+        """
+        game = GameInput.from_pgn(PGN)
+        config = EngineConfig("mock", depth=None, multipv=1, time_seconds=.1,
+                              hash_reset="game", played_move_scoring="next-position")
+        settings = asdict(config)
+        metadata = {"settings": settings, "binary_sha256": "a" * 64, "analysis_version": 2}
+        key = AnalysisCache.key(game, metadata)
+        for field, value in {"depth": 4, "multipv": 3, "threads": 2, "hash_mb": 128,
+                             "time_seconds": .2, "nodes": 1000, "hash_reset": "position",
+                             "played_move_scoring": "root-restricted"}.items():
+            with self.subTest(field=field):
+                self.assertNotEqual(key, AnalysisCache.key(game, {
+                    **metadata, "settings": {**settings, field: value},
+                }))
+
+    def test_repetition_history_and_terminal_outcomes_need_no_search(self):
+        """Recognize automatic fivefold draws using replay history, not FEN alone.
+
+        Args:
+            None.
+
+        Returns:
+            None; the terminal repeated board and mate need no engine search.
+        """
+        pgn = '1. Nf3 Nf6 2. Ng1 Ng8 3. Nf3 Nf6 4. Ng1 Ng8 5. Nf3 Nf6 6. Ng1 Ng8 7. Nf3 Nf6 8. Ng1 Ng8 *'
+        game = GameInput.from_pgn(pgn)
+        board = game.boards()[-1]
+        self.assertEqual(len(board.move_stack), 16)
+        self.assertIsNotNone(board.outcome())
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer = StockfishAnalyzer(EngineConfig("mock"), AnalysisCache(directory))
+            analyzer.engine = Mock()
+            result = analyzer._position(board)
+            self.assertEqual(result.evaluation.cp, 0)
+            self.assertEqual(result.candidates, ())
+            mate = GameInput.from_pgn('1. f3 e5 2. g4 Qh4# 0-1').boards()[-1]
+            self.assertEqual(analyzer._position(mate).evaluation.mate, -1)
+            analyzer.engine.analyse.assert_not_called()
+            analyzer.engine.analysis.assert_not_called()
+
+    def test_timed_search_ignores_interrupted_bound_iteration(self):
+        """Keep exact candidates at one complete depth, not the final bound.
+
+        Args:
+            None.
+
+        Returns:
+            None; exact complete iteration selection and missing-data errors are checked.
+        """
+        board = chess.Board()
+        moves = list(board.legal_moves)
+        exact = [{"depth": 4, "multipv": rank, "pv": [move],
+                  "score": chess.engine.PovScore(chess.engine.Cp(rank), chess.WHITE)}
+                 for rank, move in enumerate(moves[:1], 1)]
+        bound = {**exact[0], "depth": 5, "lowerbound": True}
+        with tempfile.TemporaryDirectory() as directory:
+            analyzer = StockfishAnalyzer(EngineConfig(
+                "mock", depth=None, time_seconds=.1, played_move_scoring="next-position",
+            ), AnalysisCache(directory))
+            analyzer.engine = Mock()
+            analyzer.engine.analysis.return_value = nullcontext(iter([*exact, bound]))
+            self.assertEqual(analyzer._bounded_infos(board, chess.engine.Limit(time=.1)), exact)
+            analyzer.engine.analysis.return_value = nullcontext(iter([bound]))
+            limit = chess.engine.Limit(time=.1)
+            with self.assertRaisesRegex(ValueError, "no complete exact"):
+                analyzer._bounded_infos(board, limit)
+
+    def test_fast_search_has_one_budget_per_reached_position(self):
+        """Check time caps, history and absence of fallback searches.
+
+        Args:
+            None.
+
+        Returns:
+            None; each reached board gets exactly one capped search.
+        """
+        game = GameInput.from_pgn(PGN)
+        with tempfile.TemporaryDirectory() as directory:
+            config = EngineConfig("mock")
+            analyzer = StockfishAnalyzer(config, AnalysisCache(directory))
+            engine = Mock()
+            engine.options = {"Clear Hash": None}
+            analyzer.engine = engine
+            analyzer.metadata = {"settings": config.__dict__}
+
+            def analyse(board, limit, multipv):
+                """Return one exact score while checking history and the allowance.
+
+                Args:
+                    board: History-preserving reached board.
+                    limit: Total position search limit.
+                    multipv: Requested principal variation count.
+
+                Returns:
+                    A context-managed stream of exact single-PV results.
+                """
+                self.assertEqual(limit.time, 0.1)
+                self.assertIsNone(limit.depth)
+                self.assertEqual(multipv, 1)
+                self.assertEqual(len(board.move_stack), engine.analysis.call_count - 1)
+                return nullcontext(iter([{
+                    "pv": [next(iter(board.legal_moves))], "depth": 4,
+                    "score": chess.engine.PovScore(chess.engine.Cp(0), chess.WHITE),
+                }]))
+
+            engine.analysis.side_effect = analyse
+            key, positions = analyzer.analyze(game)
+            calls = engine.analysis.call_count
+            self.assertEqual(calls, len(game.moves) + 1)
+            self.assertEqual(analyzer.analyze(game), (key, positions))
+            self.assertEqual(engine.analysis.call_count, calls)
+            self.assertEqual(analyzer.cache_hits, 1)
+            engine.analyse.assert_not_called()
+            engine.configure.assert_called_once_with({"Clear Hash": None})
+
     @unittest.skipUnless(sys.platform == "win32", "Windows event-loop compatibility")
     def test_engine_startup_with_selector_policy(self):
         """Launch a UCI subprocess under the policy used by Windows notebooks.
@@ -71,62 +194,14 @@ class AnalysisTests(unittest.TestCase):
         game = GameInput.from_pgn(PGN)
         with tempfile.TemporaryDirectory() as directory:
             cache = AnalysisCache(directory)
-            key = cache.key(game, {"depth": 12})
+            key = cache.key(game, {"time_seconds": 0.1})
             self.assertIsNone(cache.load(key))
             cache.save(key, sample_analysis(game))
             self.assertEqual(cache.load(key), sample_analysis(game))
-            self.assertNotEqual(key, cache.key(game, {"depth": 13}))
+            self.assertNotEqual(key, cache.key(game, {"time_seconds": 0.2}))
             self.assertNotEqual(
-                key, cache.key(replace(game, moves=game.moves[:-1]), {"depth": 12})
+                key, cache.key(replace(game, moves=game.moves[:-1]), {"time_seconds": 0.1})
             )
-
-    def test_outside_top_three_is_analyzed_and_cached(self):
-        """Check root-restricted analysis and complete-game cache reuse.
-
-        Args:
-            None.
-
-        Returns:
-            None; mock call counts prove required work and subsequent reuse.
-        """
-        game = GameInput.from_pgn(PGN)
-        with tempfile.TemporaryDirectory() as directory:
-            analyzer = StockfishAnalyzer(EngineConfig("mock"), AnalysisCache(directory))
-            engine = Mock()
-            engine.options = {}
-            analyzer.engine = engine
-            analyzer.metadata = {"engine": "mock", "depth": 12}
-
-            def analyse(board, limit, multipv=None, root_moves=None):
-                """Return minimal UCI info for ordinary or restricted searches.
-
-                Args:
-                    board: Replayed board supplied by the adapter.
-                    limit: Fixed-depth limit from the adapter.
-                    multipv: Requested ranked candidate count, if applicable.
-                    root_moves: Optional played-move restriction.
-
-                Returns:
-                    Ranked info list or one root-restricted exact score.
-                """
-                score = chess.engine.PovScore(chess.engine.Cp(0), chess.WHITE)
-                if root_moves:
-                    return {"score": score}
-                legal = list(board.legal_moves)
-                return [
-                    {"pv": [move], "score": score, "depth": 12} for move in legal[:3]
-                ]
-
-            engine.analyse.side_effect = analyse
-            key, result = analyzer.analyze(game)
-            calls = engine.analyse.call_count
-            self.assertGreater(calls, len(game.moves) + 1)
-            self.assertIsNotNone(result[0].played_score)
-            self.assertEqual(analyzer.analyze(game), (key, result))
-            self.assertEqual(engine.analyse.call_count, calls)
-            self.assertEqual(analyzer.cache_hits, 1)
-            self.assertEqual(analyzer.analyzed_games, 1)
-            self.assertTrue((Path(directory) / f"{key}.parquet").exists())
 
 
 if __name__ == "__main__":

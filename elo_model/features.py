@@ -7,7 +7,7 @@ import chess
 import numpy as np
 
 from .config import PIECE_VALUES, FeatureConfig
-from .feature_schema import FEATURE_NAMES, SIDE_GROUPS
+from .feature_schema import SIDE_GROUPS, feature_schema
 from .game import GameInput, PositionAnalysis
 
 
@@ -153,7 +153,7 @@ def clock_measurement(
 
 
 def clock_features(records: list[dict], config: FeatureConfig) -> dict:
-    """Aggregate observed clock segments and complexity correlation.
+    """Aggregate observed clock segments.
 
     Args:
         records: One side's nonempty chronological move measurements.
@@ -183,18 +183,8 @@ def clock_features(records: list[dict], config: FeatureConfig) -> dict:
             if record["trouble"] == 1
         ),
         "instant_rate": mean(value <= config.instant_seconds for value in times),
-        "think_complexity_correlation": math.nan,
         "clock_coverage": len(timed) / len(records),
     }
-    paired = [
-        (record["think"], record["gap"])
-        for record in timed
-        if math.isfinite(record["gap"])
-    ]
-    if len(paired) >= 2:
-        array = np.asarray(paired)
-        if np.all(array.std(axis=0) > 0):
-            result["think_complexity_correlation"] = float(np.corrcoef(array.T)[0, 1])
     return result
 
 
@@ -283,6 +273,7 @@ class GameFeatureExtractor:
             None.
         """
         self.config = config or FeatureConfig()
+        self.schema = feature_schema(self.config.schema_version)
 
     def measurements(
         self, game: GameInput, analysis: list[PositionAnalysis]
@@ -307,7 +298,11 @@ class GameFeatureExtractor:
         for index, move in enumerate(game.moves):
             board = boards[index]
             clock = game.clocks[index]
-            record = self._move(board, move, analysis[index])
+            following = analysis[index + 1]
+            reached_score = following.evaluation
+            if reached_score is None and following.candidates:
+                reached_score = following.candidates[0].score
+            record = self._move(board, move, analysis[index], reached_score)
             record.update(
                 clock_measurement(
                     previous[board.turn], clock, base, increment, self.config
@@ -317,40 +312,35 @@ class GameFeatureExtractor:
             records.append(record)
         return records
 
-    def _move(self, board: chess.Board, move: str, position: PositionAnalysis) -> dict:
-        """Measure mover-relative accuracy and pre-move complexity.
+    def _move(
+        self, board: chess.Board, move: str, position: PositionAnalysis,
+        reached_score=None,
+    ) -> dict:
+        """Measure mover-relative accuracy using the next reached evaluation.
 
         Args:
             board: Position immediately before the move.
             move: Played legal UCI move.
-            position: Exact ranked root scores and optional played-move score.
+            position: Exact single-PV root score.
+            reached_score: Next reached position's White-perspective evaluation.
 
         Returns:
-            Per-move losses, match flags, phase and second-best gap.
+            Per-move losses, best-move match and phase.
         """
         config = self.config
         if not position.candidates:
             raise ValueError("A played position needs ranked engine candidates")
         best = position.candidates[0].score
-        played = next(
-            (
-                candidate.score
-                for candidate in position.candidates
-                if candidate.move == move
-            ),
-            position.played_score,
-        )
+        if len(position.candidates) != 1:
+            raise ValueError("Single-PV schema requires one candidate per played position")
+        played = reached_score
         if played is None:
-            raise ValueError("Played move outside MultiPV requires a played_score")
+            raise ValueError("Next-position scoring requires a reached-position evaluation")
         sign = 1 if board.turn else -1
         best_probability = best.probability(config.probability_scale)
         played_probability = played.probability(config.probability_scale)
         before = best_probability if board.turn else 1 - best_probability
         after = played_probability if board.turn else 1 - played_probability
-        gap = math.nan
-        if len(position.candidates) >= 2:
-            second = position.candidates[1].score.probability(config.probability_scale)
-            gap = max(0, sign * (best_probability - second))
         return {
             "color": board.turn,
             "phase": phase_name(board, config),
@@ -363,8 +353,6 @@ class GameFeatureExtractor:
                 * (best.centipawns(config.mate_cp) - played.centipawns(config.mate_cp)),
             ),
             "top1": move == position.candidates[0].move,
-            "top3": any(candidate.move == move for candidate in position.candidates),
-            "gap": gap,
         }
 
     def _side(self, records: list[dict], flagged: float) -> dict[str, float]:
@@ -375,7 +363,7 @@ class GameFeatureExtractor:
             flagged: Explicit timeout indicator or NaN.
 
         Returns:
-            Forty-two numeric features without a self/opponent prefix.
+            Observed numeric features without a self/opponent prefix.
         """
         config = self.config
         names = [name for group in SIDE_GROUPS.values() for name in group]
@@ -395,7 +383,6 @@ class GameFeatureExtractor:
             mistake_rate=mean((losses >= config.mistake) & (losses < config.blunder)),
             blunder_rate=mean(losses >= config.blunder),
             top1_rate=mean(record["top1"] for record in records),
-            top3_rate=mean(record["top3"] for record in records),
         )
         for phase in ("opening", "middlegame", "endgame"):
             subset = [record for record in records if record["phase"] == phase]
@@ -431,29 +418,6 @@ class GameFeatureExtractor:
         result["losing_resilience"] = mean(
             record["loss"] < config.inaccuracy for record in losing
         )
-        complex_records = [record for record in records if math.isfinite(record["gap"])]
-        opportunities = [
-            record
-            for record in complex_records
-            if record["gap"] >= config.only_move_gap
-        ]
-        result["only_move_rate"] = mean(
-            record["gap"] >= config.only_move_gap for record in complex_records
-        )
-        result["only_move_success"] = mean(record["top1"] for record in opportunities)
-        result["missed_tactic_rate"] = mean(
-            record["loss"] >= config.mistake for record in opportunities
-        )
-        for name, lower, upper in (
-            ("low", 0, config.complexity_low),
-            ("medium", config.complexity_low, config.only_move_gap),
-            ("high", config.only_move_gap, math.inf),
-        ):
-            result[f"complexity_{name}_loss"] = mean(
-                record["loss"]
-                for record in complex_records
-                if lower <= record["gap"] < upper
-            )
         result["max_blunder_streak"], result["blunder_clusters"] = blunder_runs(
             [record["loss"] >= config.blunder for record in records]
         )
@@ -469,7 +433,7 @@ class GameFeatureExtractor:
             analysis: One aligned record for the initial and every reached board.
 
         Returns:
-            Float64 array of shape (2, 109), White first, in FEATURE_NAMES order.
+            Float64 array of shape (2, 93), White first, in schema order.
         """
         records = self.measurements(game, analysis)
         boards = game.boards()
@@ -481,12 +445,12 @@ class GameFeatureExtractor:
             )
         rows = []
         for color in (chess.WHITE, chess.BLACK):
-            values = dict.fromkeys(FEATURE_NAMES, math.nan)
+            values = dict.fromkeys(self.schema.names, math.nan)
             values.update(context_features(game, color))
             for prefix, side in (("self", color), ("opponent", not color)):
                 values.update(
                     {f"{prefix}_{name}": value for name, value in sides[side].items()}
                 )
             values.update(material_features(boards, color))
-            rows.append([values[name] for name in FEATURE_NAMES])
+            rows.append([values[name] for name in self.schema.names])
         return np.asarray(rows, dtype=np.float64)

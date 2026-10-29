@@ -26,8 +26,11 @@ PIECE_VALUES = {
     chess.ROOK: 500,
     chess.QUEEN: 900,
 }
-ANALYSIS_VERSION = 1
-FEATURE_SCHEMA_VERSION = 1
+ANALYSIS_VERSION = 2
+CACHE_VERSION = 1
+FEATURE_SCHEMA_VERSION = 2
+MODEL_MANIFEST_FILENAME = "model_manifest.json"
+CLEAR_HASH_OPTION = "Clear Hash"
 EngineCompatibility = Literal["exact", "same-release"]
 
 
@@ -182,6 +185,7 @@ class DatasetConfig:
 class FeatureConfig:
     """Versioned feature thresholds shared by training and inference."""
 
+    schema_version: int = FEATURE_SCHEMA_VERSION
     probability_scale: float = 200
     mate_cp: float = 10000
 
@@ -193,9 +197,6 @@ class FeatureConfig:
     inaccuracy: float = 0.05
     mistake: float = 0.10
     blunder: float = 0.20
-
-    complexity_low: float = 0.05
-    only_move_gap: float = 0.15
 
     instant_seconds: float = 1
     trouble_fraction: float = 0.10
@@ -212,6 +213,8 @@ class FeatureConfig:
         """
         if not all(math.isfinite(value) for value in asdict(self).values()):
             raise ValueError("Feature settings must be finite")
+        if self.schema_version != FEATURE_SCHEMA_VERSION:
+            raise ValueError("Unsupported feature schema")
 
         if self.probability_scale <= 0 or self.mate_cp <= 0:
             raise ValueError("Score scales must be positive")
@@ -221,9 +224,6 @@ class FeatureConfig:
 
         if not 0 < self.losing_probability < self.winning_probability < 1:
             raise ValueError("Position probability thresholds must increase")
-
-        if not 0 < self.complexity_low < self.only_move_gap < 1:
-            raise ValueError("Complexity thresholds must increase")
 
         if (
             min(
@@ -242,13 +242,17 @@ class FeatureConfig:
 
 @dataclass(frozen=True)
 class EngineConfig:
-    """Fixed-depth analysis settings; the engine is installed separately."""
+    """Search contract; time is a total search allowance, not wall-clock SLA."""
 
     executable: str
-    depth: int = 12
-    multipv: int = 3
+    depth: int | None = None
+    multipv: int = 1
     threads: int = 1
     hash_mb: int = 64
+    time_seconds: float | None = 0.1
+    nodes: int | None = None
+    hash_reset: Literal["game"] = "game"
+    played_move_scoring: Literal["next-position"] = "next-position"
 
     def __post_init__(self) -> None:
         """Reject invalid engine limits before starting a process.
@@ -259,7 +263,9 @@ class EngineConfig:
         Returns:
             None; invalid settings raise ValueError.
         """
-        limits = (self.depth, self.threads, self.hash_mb)
+        limits = (self.threads, self.hash_mb, *(
+            value for value in (self.depth, self.nodes) if value is not None
+        ))
 
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value < 1
@@ -267,8 +273,37 @@ class EngineConfig:
         ):
             raise ValueError("Depth, threads and hash_mb must be positive integers")
 
-        if self.multipv != 3:
-            raise ValueError("The feature contract requires MultiPV=3")
+        if self.multipv != 1:
+            raise ValueError("The rating model requires MultiPV=1")
+        if self.time_seconds is not None and (
+            isinstance(self.time_seconds, bool)
+            or not math.isfinite(self.time_seconds) or self.time_seconds <= 0
+        ):
+            raise ValueError("time_seconds must be finite and positive")
+        if self.depth is None and self.nodes is None and self.time_seconds is None:
+            raise ValueError("Provide a search limit")
+        if self.hash_reset != "game":
+            raise ValueError("The rating model requires game-local hash retention")
+        if self.played_move_scoring != "next-position":
+            raise ValueError("The rating model requires next-position scoring")
+
+
+def validate_feature_engine(config: FeatureConfig, metadata: dict | None) -> None:
+    """Reject feature/engine contracts with incompatible scoring or candidate inputs.
+
+    Args:
+        config: Exact feature schema and transformation thresholds.
+        metadata: Recorded engine identity and search settings.
+
+    Returns:
+        None; fast schemas require complete matching search provenance.
+    """
+    settings = (metadata or {}).get("settings", {})
+    required = {"depth", "time_seconds", "nodes", "threads", "hash_mb",
+                "hash_reset", "played_move_scoring", "multipv"}
+    if not metadata or not required.issubset(settings) or metadata.get("analysis_version") != ANALYSIS_VERSION:
+        raise ValueError("Fast features require complete version-2 engine provenance")
+    EngineConfig(executable="provenance", **settings)
 
 
 @dataclass(frozen=True)
@@ -447,9 +482,10 @@ class PipelineConfig:
     usernames_path: Path = Path("player_usernames.json")
 
     data_directory: Path = Path("data/notebook")
+    analysis_directory: Path = Path("data/notebook_fast_v2")
     engine_cache_directory: Path = Path("data/analysis_cache")
     artifact_directory: Path = Path("artifacts/rating_model")
-    training_directory: Path = Path("runs/latest")
+    training_directory: Path = Path("runs/fast_v2")
 
     split_fractions: tuple[float, float, float] = DEFAULT_SPLIT_FRACTIONS
     min_players_per_partition: int = 5
@@ -567,7 +603,7 @@ class PipelineConfig:
         Returns:
             Analyzed game manifest Parquet path.
         """
-        return self.data_directory / "analyzed.parquet"
+        return self.analysis_directory / "analyzed.parquet"
 
     @property
     def features_path(self) -> Path:
@@ -579,11 +615,12 @@ class PipelineConfig:
         Returns:
             Feature table Parquet path.
         """
-        return self.data_directory / "features.parquet"
+        return self.analysis_directory / "features.parquet"
 
 
 CLI_CONFIG = PipelineConfig(
     data_directory=Path("data"),
+    analysis_directory=Path("data/fast_v2"),
     collection=DatasetConfig(),
     training=TrainingConfig(),
 )

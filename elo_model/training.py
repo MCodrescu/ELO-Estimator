@@ -1,4 +1,4 @@
-"""Small LightGBM experiments with a train-only Ridge preprocessing baseline."""
+"""LightGBM training with a train-only Ridge preprocessing baseline."""
 
 from dataclasses import asdict
 
@@ -13,9 +13,9 @@ from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from tqdm.auto import tqdm
 
-from .config import TIME_CATEGORIES, TrainingConfig
+from .config import TIME_CATEGORIES, FeatureConfig, TrainingConfig
 from .evaluation import evaluate, grouped_importance, sample_weights
-from .feature_schema import FEATURE_NAMES
+from .feature_schema import feature_schema
 from .split import PARTITIONS, assert_disjoint, normalize_player
 
 
@@ -28,17 +28,19 @@ class TrainingResult:
     metadata: dict
 
 
-def validate_feature_table(frame: pd.DataFrame) -> pd.DataFrame:
+def validate_feature_table(frame: pd.DataFrame, schema_version: int = 2) -> pd.DataFrame:
     """Reject leakage, missing labels, malformed numeric X and duplicate side rows.
 
     Args:
         frame: Ordered numeric features plus labels and split metadata.
+        schema_version: Explicit feature contract used to construct the table.
 
     Returns:
         Validated copy with normalized target usernames.
     """
+    names = feature_schema(schema_version).names
     required = {
-        *FEATURE_NAMES,
+        *names,
         "rating",
         "category",
         "partition",
@@ -54,7 +56,7 @@ def validate_feature_table(frame: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(
             "Training requires nonempty train, validation and test partitions"
         )
-    matrix = result.loc[:, list(FEATURE_NAMES)].to_numpy(dtype=float)
+    matrix = result.loc[:, list(names)].to_numpy(dtype=float)
     if np.isinf(matrix).any():
         raise ValueError("Feature values may be finite or NaN, never infinite")
     ratings = result["rating"].to_numpy(dtype=float)
@@ -70,16 +72,18 @@ def validate_feature_table(frame: pd.DataFrame) -> pd.DataFrame:
 class ModelTrainer:
     """Fit pooled or category-specific boosters on explicitly isolated rows."""
 
-    def __init__(self, config: TrainingConfig | None = None):
+    def __init__(self, config: TrainingConfig | None = None, feature_config: FeatureConfig | None = None):
         """Prepare training without fitting or touching any data.
 
         Args:
             config: Reproducible tuning, model mode and weighting settings.
+            feature_config: Versioned transformations used to construct the table.
 
         Returns:
             None.
         """
         self.config = config or TrainingConfig()
+        self.schema = feature_schema((feature_config or FeatureConfig()).schema_version)
 
     def _fit_booster(
         self,
@@ -132,11 +136,11 @@ class ModelTrainer:
                 bar.update(1)
 
             model.fit(
-                train.loc[:, list(FEATURE_NAMES)],
+                train.loc[:, list(self.schema.names)],
                 train["rating"],
                 sample_weight=weights,
                 eval_set=[
-                    (validation.loc[:, list(FEATURE_NAMES)], validation["rating"])
+                    (validation.loc[:, list(self.schema.names)], validation["rating"])
                 ],
                 eval_metric="l1",
                 callbacks=[
@@ -182,7 +186,7 @@ class ModelTrainer:
                 "max_depth": trial.suggest_int("max_depth", 3, 8),
             }
             model = self._fit_booster(train, validation, weights, parameters)
-            predictions = model.predict(validation.loc[:, list(FEATURE_NAMES)])
+            predictions = model.predict(validation.loc[:, list(self.schema.names)])
             return float(np.mean(np.abs(predictions - validation["rating"].to_numpy())))
 
         study = optuna.create_study(
@@ -231,7 +235,7 @@ class ModelTrainer:
             memory=None,
         )
         baseline.fit(
-            train.loc[:, list(FEATURE_NAMES)],
+            train.loc[:, list(self.schema.names)],
             train["rating"],
             ridge__sample_weight=weights,
         )
@@ -243,11 +247,11 @@ class ModelTrainer:
             "parameters": parameters,
             "trials": trials,
             "best_iteration": model.best_iteration_,
-            "feature_importance": grouped_importance(model.booster_),
+            "feature_importance": grouped_importance(model.booster_, self.schema.groups),
             "partitions": {},
         }
         for name, subset in partitions.items():
-            matrix = subset.loc[:, list(FEATURE_NAMES)]
+            matrix = subset.loc[:, list(self.schema.names)]
             report["partitions"][name] = {
                 "lightgbm": evaluate(subset, model.predict(matrix)),
                 "ridge": evaluate(subset, baseline.predict(matrix)),
@@ -266,7 +270,7 @@ class ModelTrainer:
         Returns:
             Selected boosters, evaluation reports and reproducibility metadata.
         """
-        frame = validate_feature_table(frame)
+        frame = validate_feature_table(frame, self.schema.version)
         groups = {"pooled": frame}
         if self.config.mode == "separate":
             groups = {
@@ -323,7 +327,7 @@ class ModelTrainer:
             }
             for category, model in models.items():
                 mask = (rows["category"] == category).to_numpy()
-                matrix = rows.loc[mask, list(FEATURE_NAMES)]
+                matrix = rows.loc[mask, list(self.schema.names)]
                 predictions["lightgbm"][mask] = model.predict(matrix, num_threads=1)
                 predictions["ridge"][mask] = baselines[category].predict(matrix)
                 predictions["train_median"][mask] = medians[category]

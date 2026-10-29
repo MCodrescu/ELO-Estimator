@@ -17,6 +17,7 @@ from elo_model.__main__ import main
 from elo_model.analysis import AnalysisCache
 from elo_model.config import (
     EngineConfig,
+    FeatureConfig,
     PipelineConfig,
     RatingQuota,
     StratificationConfig,
@@ -26,13 +27,34 @@ from elo_model.game import GameInput
 from elo_model.pipeline import analyze_dataset, extract_dataset, save_feature_dataset
 from elo_model.split import PlayerSplitter
 from elo_model.storage import replace_checkpoint, write_json, write_parquet
-from tests.test_features import PGN, sample_analysis
+from tests.test_features import PGN, sample_analysis, sample_engine_metadata
 from tests.test_model_dataset import source_game
 from tests.test_model_training import synthetic_frame
 from training_data.model_dataset import training_record
 
 
 class PipelineTests(unittest.TestCase):
+    def test_fast_extraction_rejects_mixed_contract_cache_keys(self):
+        """Reject references to legacy scores before extracting fast features.
+
+        Args:
+            None.
+
+        Returns:
+            None; cache provenance and mandatory fast metadata are checked.
+        """
+        settings = asdict(EngineConfig("mock", depth=None, multipv=1, time_seconds=.1,
+                                      played_move_scoring="next-position"))
+        settings.pop("executable")
+        metadata = {"settings": settings, "analysis_version": 2}
+        frame = pd.DataFrame([{"pgn": PGN, "analysis_key": "a" * 64}])
+        feature_config = FeatureConfig(schema_version=2)
+        with tempfile.TemporaryDirectory() as directory:
+            with self.assertRaisesRegex(ValueError, "cache key"):
+                extract_dataset(frame, directory, feature_config, engine_metadata=metadata)
+            with self.assertRaisesRegex(ValueError, "provenance"):
+                extract_dataset(frame, directory, feature_config)
+
     def test_cli_split_applies_training_quotas_and_saves_provenance(self):
         """Apply CLI quotas before analysis without resampling hold-out games.
 
@@ -259,6 +281,7 @@ class PipelineTests(unittest.TestCase):
                 target_games=90,
                 usernames_path=usernames_path,
                 data_directory=root / "data",
+                analysis_directory=root / "data",
                 engine_cache_directory=root / "cache",
                 artifact_directory=root / "model",
                 split_fractions=(0.6, 0.2, 0.2),
@@ -269,7 +292,7 @@ class PipelineTests(unittest.TestCase):
                 training=TrainingConfig(trials=0, max_trees=5, min_rows=2),
             )
             archives = self.notebook_archives(settings.candidate_games)
-            metadata = {"engine": "synthetic-notebook-test"}
+            metadata = sample_engine_metadata()
             namespace = {"test_settings": settings}
 
             def analyze_fixture(games, config, cache_directory, output, progress=False):
@@ -400,10 +423,11 @@ class PipelineTests(unittest.TestCase):
         frame["keep_white"], frame["keep_black"] = True, False
         with tempfile.TemporaryDirectory() as directory:
             cache = AnalysisCache(directory)
-            key = cache.key(game, {"engine": "mock"})
+            metadata = sample_engine_metadata()
+            key = cache.key(game, metadata)
             cache.save(key, sample_analysis(game))
             frame["analysis_key"] = key
-            rows = extract_dataset(frame, directory)
+            rows = extract_dataset(frame, directory, engine_metadata=metadata)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows.iloc[0]["target_username"], "alice")
             self.assertEqual(rows.iloc[0]["rating"], 1200)
@@ -421,7 +445,7 @@ class PipelineTests(unittest.TestCase):
             root = Path(directory)
             features = root / "features.parquet"
             trained, exported = root / "trained", root / "exported"
-            metadata = {"engine": "synthetic-test-only"}
+            metadata = sample_engine_metadata()
             save_feature_dataset(synthetic_frame(), features, metadata)
             self.run_cli(
                 "train",

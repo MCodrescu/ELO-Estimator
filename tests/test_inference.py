@@ -6,7 +6,7 @@ import json
 import tempfile
 import unittest
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -15,10 +15,11 @@ from elo_model.analysis import AnalysisCache
 from elo_model.config import (
     ANALYSIS_VERSION,
     EngineConfig,
+    FeatureConfig,
     InferenceConfig,
     TrainingConfig,
 )
-from elo_model.game import GameInput
+from elo_model.game import GameInput, Score
 from elo_model.inference import RatingEstimator
 from elo_model.predictor import export_bundle
 from elo_model.storage import write_json
@@ -28,6 +29,43 @@ from tests.test_model_training import synthetic_frame
 
 
 class InferenceTests(unittest.TestCase):
+    def test_fast_supplied_analysis_reuses_scores_without_an_engine(self):
+        """Reuse single-PV review scores and reject every changed search contract.
+
+        Args:
+            None.
+
+        Returns:
+            None; prediction is engine-free and provenance remains strict.
+        """
+        features = FeatureConfig(schema_version=2)
+        frame = synthetic_frame()
+        result = ModelTrainer(TrainingConfig(trials=0, max_trees=5), features).fit(frame)
+        settings = asdict(EngineConfig("mock", depth=None, multipv=1, time_seconds=.1,
+                                      hash_reset="game", played_move_scoring="next-position"))
+        settings.pop("executable")
+        metadata = {"settings": settings, "analysis_version": 2,
+                    "id": {"name": "Test engine"}, "binary_sha256": "a" * 64}
+        result.metadata["engine"] = metadata
+        game = GameInput.from_pgn(PGN)
+        analysis = [replace(position, candidates=position.candidates[:1], evaluation=Score(cp=0))
+                    for position in sample_analysis(game)]
+        with tempfile.TemporaryDirectory() as directory:
+            export_bundle(result.models, directory, frame.iloc[-10:], result.metadata,
+                          result.report, features)
+            estimator = RatingEstimator(InferenceConfig(model_directory=directory))
+            with patch("elo_model.inference.StockfishAnalyzer") as engine:
+                estimate = estimator.predict_pgn(PGN, analysis=analysis, engine_metadata=metadata)
+                engine.assert_not_called()
+            self.assertIsNone(estimate.cache_hit)
+            self.assertEqual(estimate.engine_metadata, metadata)
+            for field, value in {"time_seconds": .2, "nodes": 100, "depth": 12,
+                                 "hash_reset": "position", "played_move_scoring": "root-restricted",
+                                 "multipv": 3, "threads": 2, "hash_mb": 128}.items():
+                changed = {**metadata, "settings": {**settings, field: value}}
+                with self.subTest(field=field), self.assertRaisesRegex(ValueError, "metadata"):
+                    estimator.predict_pgn(PGN, analysis=analysis, engine_metadata=changed)
+
     def test_cli_same_release_accepts_cross_build_analysis(self):
         """Forward the explicit CLI policy without changing engine metadata.
 
@@ -98,7 +136,7 @@ class InferenceTests(unittest.TestCase):
         invalid = [None, {}, {**self.metadata, "binary_sha256": "invalid"}]
         for field in ("depth", "multipv", "threads", "hash_mb"):
             metadata = deepcopy(self.metadata)
-            metadata["settings"][field] += 1
+            metadata["settings"][field] = (metadata["settings"][field] or 0) + 1
             invalid.append(metadata)
         invalid.append({**self.metadata, "id": {"name": "Different release"}})
         invalid.append({**self.metadata, "analysis_version": ANALYSIS_VERSION + 1})

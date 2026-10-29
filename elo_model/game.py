@@ -13,7 +13,6 @@ from .config import (
     TIME_CATEGORIES,
     TIME_CATEGORY_LIMITS,
     TIME_CONTROL_INCREMENT_MOVES,
-    EngineConfig,
     FeatureConfig,
 )
 
@@ -82,19 +81,18 @@ class Candidate:
 
     move: str
     score: Score
-    depth: int = EngineConfig.depth
+    depth: int = 0
     lowerbound: bool = False
     upperbound: bool = False
 
 
 @dataclass(frozen=True)
 class PositionAnalysis:
-    """Analysis aligned with one reached board; played score is root-restricted."""
+    """White-perspective single-PV evaluation aligned with one reached board."""
 
     fen: str
     candidates: tuple[Candidate, ...]
-    played_score: Score | None = None
-    depth: int = EngineConfig.depth
+    depth: int = 0
     evaluation: Score | None = None
 
 

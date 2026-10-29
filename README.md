@@ -1,138 +1,68 @@
-# Single-Game Chess Rating Estimator
+# Chess Rating Estimator
 
-Estimate each player's **Chess.com rating from a single completed game**. The
-pipeline turns moves, clock usage, time control, and Stockfish evaluations into
-109 numeric features per player, then trains a LightGBM regressor against their
-recorded game-time rating.
+Estimate both players' Chess.com playing strength from a completed game using
+clock usage, game context and Stockfish evaluations. Package **0.2.0** supports
+timed single-PV analysis with next-position move scoring and 93 schema-2 features.
 
-The goal is to learn how playing behavior relates to rating, rather than identify
-known players. Usernames and rating labels are excluded from model inputs.
+## Analysis
 
-## How It Works
+- 0.1-second total engine-search allowance per reached position.
+- One thread, 64 MiB hash, MultiPV 1; no played-move fallback searches.
+- Clear hash before each game, retain it across chronological positions.
+- White-perspective scores and full replay history, including the final position.
 
-1. **Collect games.** Fetch Chess.com archives for saved usernames, deduplicate
-   games, and retain rated, completed standard games with usable clock annotations.
-2. **Split before training.** Assign games and prediction-target players to
-   train, validation, and test partitions to reduce leakage from repeat players.
-   Select training sides by game-time rating/category quotas; leave hold-outs unchanged.
-3. **Analyze decisions.** Replay each game with Stockfish at depth 12, comparing
-   played moves with the top three alternatives. Moves outside the top three get
-   a separate evaluation so their quality is measured rather than guessed.
-4. **Summarize behavior.** Build a fixed-size feature vector for each side.
-   Aggregates describe accuracy, decision difficulty, and time management across
-   games of different lengths.
-5. **Train and evaluate.** Tune LightGBM with Optuna using validation error, then
-   evaluate on the untouched test partition. Compare with Ridge and a train-median
-   baseline, reporting MAE and RMSE overall, by rating band, and by time category.
-6. **Export and predict.** Save native LightGBM models with their feature schema
-   and analysis settings. Verify that reloaded models reproduce predictions.
+The allowance is not an end-to-end wall-clock guarantee. Analysis runs once and
+can be reused for the evaluation graph, move insights, accuracy summaries and
+rating predictions. Candidate-gap and top-three features are not used.
 
-By default, opponents may appear across partitions even though prediction-target
-players do not. A stricter split can require both participants to stay within the
-same partition, at the cost of discarding more games.
+The selected bundle is [artifacts/rating_model](artifacts/rating_model/model_manifest.json),
+version `rating-fast-v2`. It used 45 training, 30 validation and 23 test player
+rows. Test MAE is **606.6** and RMSE **732.8** rating points. The speed/accuracy
+tradeoff was explicitly accepted; full-data retraining remains pending. Older
+analysis contracts and bundles are no longer supported.
 
-## Features
+## Train
 
-| Signal | What It Captures |
-| --- | --- |
-| Move quality | Centipawn and score-derived probability loss; inaccuracies, mistakes, and blunders |
-| Game phases | Accuracy during the opening, middlegame, and endgame |
-| Position and difficulty | Play in winning or losing positions, gaps between candidate moves, and missed tactics |
-| Error patterns | Consecutive blunders and clusters of mistakes |
-| Time management | Think times, instant moves, time trouble, and time spent on difficult decisions |
-| Game context | Time control, opening family, result, termination, and material checkpoints |
-| Opponent behavior | Mirrored accuracy, difficulty, and clock summaries |
+```text
+python -m pip install ".[train]"
+```
 
-Missing observations remain missing rather than being filled with artificial
-zeros. Result and termination features make this a **post-game estimator**;
-predictions from unfinished games are outside the training distribution.
+Install Stockfish separately and set its executable in
+[elo_model/config.py](elo_model/config.py). Restart the notebook kernel, then run
+[build_training_data.ipynb](build_training_data.ipynb) from Cell 1 onward. It reuses
+saved raw games and collects more only when needed. The workflow splits by target
+player and game before analysis, applies training quotas, extracts fast features,
+tunes LightGBM on validation rows and reports held-out errors before export.
 
-## Reuse a Model
+Raw games and splits live in `data/notebook`; fast analysis references and features
+live in `data/notebook_fast_v2`. The shared engine cache is keyed by game history
+and complete engine contract. Exports go to `artifacts/rating_model`; choose a new
+artifact directory when preserving a release. Individual stages are available
+through `python -m elo_model --help`.
 
-The current trained bundle is checked in under `artifacts/rating_model`; its
-[model manifest](artifacts/rating_model/model_manifest.json) records the feature
-and engine contract. Copy the complete directory from a pinned Git commit into
-the consuming application's deployment. These files are not included in the wheel.
-
-Install the package with `pip install ".[engine]"` from this checkout and deploy
-an exported model bundle plus a compatible Stockfish executable:
+## Predict
 
 ```python
 from elo_model.config import InferenceConfig
 from elo_model.inference import RatingEstimator
 
 estimator = RatingEstimator(InferenceConfig(
-   model_directory="artifacts/rating_model",
-   engine_executable="/path/to/stockfish",
-   cache_directory="data/analysis_cache",
+    model_directory="artifacts/rating_model",
+    engine_executable="/path/to/stockfish",
+    cache_directory="data/analysis_cache",
 ))
 estimate = estimator.predict_pgn(pgn_text)
 print(estimate.model_dump())
 ```
 
-Reuse the estimator per worker; run engine analysis in background jobs for web
-apps. Models and Stockfish are not bundled with the package. See
-[docs/integration.md](docs/integration.md) for Django integration, installation in
-another repository, engine compatibility, and publishing versioned weights.
+Reuse the estimator per worker and run engine analysis in background jobs.
+The package does not include Stockfish or install weights automatically. See
+[docs/integration.md](docs/integration.md) for deployment, exact compatibility
+requirements and reusing supplied analysis without another engine pass.
 
-For Linux inference with Windows-trained weights, set
-`engine_compatibility="same-release"` in `InferenceConfig`. This allows a different
-binary fingerprint while requiring the same engine identity and analysis settings.
-It does not establish cross-build prediction parity; compare representative games
-before deployment. Exact matching remains the default.
+## Validate
 
-## Running It
-
-Install the Python dependencies and a Stockfish executable:
-
-```powershell
-python -m pip install -r requirements.txt
+```text
+python -m unittest discover -s tests -q
+ruff check elo_model training_data tests
 ```
-
-Set engine paths, collection settings, and training options in
-[elo_model/config.py](elo_model/config.py), then run
-[build_training_data.ipynb](build_training_data.ipynb) in order. It collects games
-from [player_usernames.json](player_usernames.json), builds the dataset, trains the
-model, and exports a bundle. Individual stages are also available through
-`python -m elo_model --help`.
-
-Training selection is configured through `PipelineConfig.stratification`. Defaults
-collect up to 3,000 candidate games, then request 500 blitz rows and 100 rows for
-each other time category per rating band, with at most 10 rows per target player.
-Cell 5 reports available/selected players and rows, including unfilled quotas,
-before Stockfish runs. Quotas are caps, not guaranteed collection yields.
-
-For example, restrict training to a particular rating range and category:
-
-```python
-from dataclasses import replace
-from elo_model.config import RatingQuota, StratificationConfig
-
-settings = replace(settings, stratification=StratificationConfig(quotas=(
-   RatingQuota(lower=1000, upper=1400, category="blitz", rows=500),
-)))
-```
-
-Bounds are lower-inclusive and upper-exclusive. Apply overrides after notebook
-setup and before collection. Use `StratificationConfig()` to disable selection.
-CLI `split --selection-config quotas.json` accepts the same settings as JSON.
-Selection settings and coverage are saved beside the split manifest and included
-in the notebook's exported model provenance. Existing raw games remain reusable.
-
-Analysis uses **eight concurrent Stockfish processes** by default. Per-game
-evaluations are cached by move history, engine identity, and analysis settings, so
-additional datasets can reuse completed work. Changing worker count does not
-invalidate the cache; features can also be recalculated without rerunning Stockfish.
-
-## Code Map
-
-- [training_data/model_dataset.py](training_data/model_dataset.py): collection, filtering, and deduplication.
-- [elo_model/analysis.py](elo_model/analysis.py): engine evaluation and persistent cache.
-- [elo_model/features.py](elo_model/features.py): player-level feature extraction.
-- [elo_model/split.py](elo_model/split.py): player-aware dataset partitioning.
-- [elo_model/selection.py](elo_model/selection.py): reproducible training quotas and coverage reports.
-- [elo_model/training.py](elo_model/training.py): model fitting, tuning, and evaluation.
-- [elo_model/predictor.py](elo_model/predictor.py): model export, loading, and inference.
-- [elo_model/pipeline.py](elo_model/pipeline.py): stage orchestration and parallel analysis.
-
-Run the offline test suite with `python -m unittest discover -s tests`.

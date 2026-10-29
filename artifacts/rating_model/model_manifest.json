@@ -18,9 +18,10 @@
     "bullet",
     "rapid"
   ],
-  "schema_version": 1,
-  "feature_hash": "6261c350a5afc915bce2322f69199f2f62d383ccd3ca013acd02ecec64c44442",
+  "schema_version": 2,
+  "feature_hash": "099f1f0f211939bb634cffbc5f77f83fd6c455fba622248eee3b2e8b3e507de4",
   "feature_config": {
+    "schema_version": 2,
     "probability_scale": 200,
     "mate_cp": 10000,
     "opening_fullmoves": 10,
@@ -30,8 +31,6 @@
     "inaccuracy": 0.05,
     "mistake": 0.1,
     "blunder": 0.2,
-    "complexity_low": 0.05,
-    "only_move_gap": 0.15,
     "instant_seconds": 1,
     "trouble_fraction": 0.1,
     "clock_jitter": 0.05
@@ -43,12 +42,35 @@
     },
     "binary_sha256": "45bc8e4969147db9c2eb533810637994619bff0eacc81ccfd9854394901bcbd0",
     "settings": {
-      "depth": 12,
-      "multipv": 3,
+      "depth": null,
+      "multipv": 1,
       "threads": 1,
-      "hash_mb": 64
+      "hash_mb": 64,
+      "time_seconds": 0.1,
+      "nodes": null,
+      "hash_reset": "game",
+      "played_move_scoring": "next-position"
     },
-    "analysis_version": 1
+    "analysis_version": 2,
+    "initialization": "clear-hash-per-game",
+    "position_order": "initial-then-reached-chronological-full-history",
+    "uci_defaults": {
+      "Debug Log File": "<empty>",
+      "NumaPolicy": "auto",
+      "Ponder": false,
+      "Skill Level": 20,
+      "Move Overhead": 10,
+      "nodestime": 0,
+      "UCI_Chess960": false,
+      "UCI_LimitStrength": false,
+      "UCI_Elo": 1320,
+      "UCI_ShowWDL": false,
+      "SyzygyPath": "<empty>",
+      "SyzygyProbeDepth": 1,
+      "Syzygy50MoveRule": true,
+      "SyzygyProbeLimit": 7,
+      "EvalFile": "nn-1a298aa575a0.nnue"
+    }
   },
   "dataset_games": 2652,
   "candidate_games": 3000,
@@ -393,6 +415,59 @@
   "artifact_version": 1,
   "models": {
     "pooled": "pooled.txt"
+  },
+  "package_version": "0.2.0",
+  "engine_compatibility_policy": "exact",
+  "analysis_contract": {
+    "engine": {
+      "id": {
+        "name": "Stockfish 19",
+        "author": "the Stockfish developers (see AUTHORS file)"
+      },
+      "binary_sha256": "45bc8e4969147db9c2eb533810637994619bff0eacc81ccfd9854394901bcbd0",
+      "settings": {
+        "depth": null,
+        "multipv": 1,
+        "threads": 1,
+        "hash_mb": 64,
+        "time_seconds": 0.1,
+        "nodes": null,
+        "hash_reset": "game",
+        "played_move_scoring": "next-position"
+      },
+      "analysis_version": 2,
+      "initialization": "clear-hash-per-game",
+      "position_order": "initial-then-reached-chronological-full-history",
+      "uci_defaults": {
+        "Debug Log File": "<empty>",
+        "NumaPolicy": "auto",
+        "Ponder": false,
+        "Skill Level": 20,
+        "Move Overhead": 10,
+        "nodestime": 0,
+        "UCI_Chess960": false,
+        "UCI_LimitStrength": false,
+        "UCI_Elo": 1320,
+        "UCI_ShowWDL": false,
+        "SyzygyPath": "<empty>",
+        "SyzygyProbeDepth": 1,
+        "Syzygy50MoveRule": true,
+        "SyzygyProbeLimit": 7,
+        "EvalFile": "nn-1a298aa575a0.nnue"
+      }
+    },
+    "compatibility_policy": "exact",
+    "schema_version": 2,
+    "settings": {
+      "depth": null,
+      "multipv": 1,
+      "threads": 1,
+      "hash_mb": 64,
+      "time_seconds": 0.1,
+      "nodes": null,
+      "hash_reset": "game",
+      "played_move_scoring": "next-position"
+    }
   },
   "time_category_rule": {
     "estimated_seconds": "base + 40 * increment",

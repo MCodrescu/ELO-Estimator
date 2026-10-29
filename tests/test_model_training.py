@@ -1,17 +1,20 @@
-"""Tiny synthetic experiments verify tuning, reporting and native model parity."""
+"""Small offline tests verify tuning, reporting and native model parity."""
 
 import json
 import tempfile
 import unittest
+from dataclasses import asdict
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from elo_model.config import EngineConfig, FeatureConfig
 from elo_model.evaluation import evaluate, sample_weights
 from elo_model.feature_schema import FEATURE_NAMES
 from elo_model.predictor import RatingPredictor, export_bundle
 from elo_model.training import ModelTrainer, TrainingConfig
+from tests.test_features import sample_engine_metadata
 
 
 def synthetic_frame():
@@ -37,6 +40,35 @@ def synthetic_frame():
 
 
 class TrainingTests(unittest.TestCase):
+    def test_fast_schema_export_and_incompatible_analysis_rejection(self):
+        """Train reduced inputs and reject legacy provenance or overwrite attempts.
+
+        Args:
+            None.
+
+        Returns:
+            None; native reduced-schema parity and contract isolation are asserted.
+        """
+        features = FeatureConfig(schema_version=2)
+        frame = synthetic_frame()
+        result = ModelTrainer(TrainingConfig(trials=0, max_trees=5), features).fit(frame)
+        engine = asdict(EngineConfig("mock", depth=None, multipv=1, time_seconds=.1,
+                                    played_move_scoring="next-position"))
+        engine.pop("executable")
+        result.metadata["engine"] = {"settings": engine, "analysis_version": 2,
+                                     "id": {"name": "mock"}, "binary_sha256": "a" * 64}
+        with tempfile.TemporaryDirectory() as directory:
+            export_bundle(result.models, directory, frame.iloc[-10:], result.metadata,
+                          result.report, features, model_version="test-fast-v2")
+            predictor = RatingPredictor(directory)
+            self.assertEqual(len(predictor.schema.names), 93)
+            self.assertTrue(np.isfinite(predictor.predict(frame.loc[:2, list(predictor.schema.names)])).all())
+            with self.assertRaisesRegex(ValueError, "metadata"):
+                predictor.validate_engine_metadata({"settings": {"depth": 12}})
+            changed = {**result.metadata, "engine": {**result.metadata["engine"], "binary_sha256": "b" * 64}}
+            with self.assertRaisesRegex(ValueError, "separate"):
+                export_bundle(result.models, directory, frame.iloc[-10:], changed, {}, features)
+
     def test_train_tune_and_export_roundtrip(self):
         """Run one tuning trial and verify native reload/schema protection.
 
@@ -50,6 +82,7 @@ class TrainingTests(unittest.TestCase):
         result = ModelTrainer(
             TrainingConfig(trials=1, max_trees=30, early_stopping_rounds=5)
         ).fit(frame)
+        result.metadata["engine"] = sample_engine_metadata()
         self.assertIn("ridge", result.report["pooled"]["partitions"]["test"])
         self.assertEqual(len(result.report["pooled"]["trials"]), 1)
         with tempfile.TemporaryDirectory() as directory:
@@ -87,6 +120,7 @@ class TrainingTests(unittest.TestCase):
         result = ModelTrainer(
             TrainingConfig(mode="separate", trials=0, max_trees=5)
         ).fit(frame)
+        result.metadata["engine"] = sample_engine_metadata()
         self.assertEqual(set(result.models), {"blitz", "rapid"})
         self.assertEqual(
             result.report["combined"]["partitions"]["test"]["lightgbm"]["overall"][

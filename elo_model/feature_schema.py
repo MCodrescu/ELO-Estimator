@@ -3,6 +3,8 @@
 import hashlib
 import json
 
+from pydantic import BaseModel, ConfigDict
+
 from .config import FEATURE_SCHEMA_VERSION
 
 SCHEMA_VERSION = FEATURE_SCHEMA_VERSION
@@ -17,7 +19,6 @@ ACCURACY = (
     "mistake_rate",
     "blunder_rate",
     "top1_rate",
-    "top3_rate",
 )
 PHASE = tuple(
     f"{phase}_{metric}"
@@ -31,14 +32,6 @@ POSITION = (
     "winning_retention",
     "losing_resilience",
 )
-COMPLEXITY = (
-    "only_move_rate",
-    "only_move_success",
-    "complexity_low_loss",
-    "complexity_medium_loss",
-    "complexity_high_loss",
-    "missed_tactic_rate",
-)
 PATTERNS = ("max_blunder_streak", "blunder_clusters")
 CLOCK = (
     "think_mean",
@@ -48,7 +41,6 @@ CLOCK = (
     "time_trouble_share",
     "time_trouble_blunder_rate",
     "instant_rate",
-    "think_complexity_correlation",
     "flagged",
     "clock_coverage",
 )
@@ -56,7 +48,7 @@ SIDE_GROUPS = {
     "accuracy": ACCURACY,
     "phase": PHASE,
     "position": POSITION,
-    "complexity": COMPLEXITY,
+    "complexity": (),
     "patterns": PATTERNS,
     "clock": CLOCK,
 }
@@ -87,3 +79,31 @@ FEATURE_GROUPS = {
 }
 FEATURE_NAMES = tuple(name for names in FEATURE_GROUPS.values() for name in names)
 FEATURE_HASH = hashlib.sha256(json.dumps(FEATURE_NAMES).encode()).hexdigest()
+
+
+class FeatureSchema(BaseModel):
+    """Explicit feature order for the single-PV rating model."""
+
+    model_config = ConfigDict(frozen=True)
+
+    version: int
+    groups: dict[str, tuple[str, ...]]
+    names: tuple[str, ...]
+    fingerprint: str
+
+
+def feature_schema(version: int = 2) -> FeatureSchema:
+    """Resolve a supported schema without padding unavailable observations.
+
+    Args:
+        version: Supported single-PV feature schema, version two.
+
+    Returns:
+        Versioned groups, ordered names and their SHA-256 fingerprint.
+    """
+    if version != 2:
+        raise ValueError("Unsupported feature schema")
+    return FeatureSchema(
+        version=version, groups=FEATURE_GROUPS, names=FEATURE_NAMES,
+        fingerprint=FEATURE_HASH,
+    )

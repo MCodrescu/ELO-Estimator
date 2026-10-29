@@ -14,13 +14,15 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, FiniteFloat
 
 from .config import (
+    MODEL_MANIFEST_FILENAME,
     TIME_CATEGORIES,
     TIME_CATEGORY_LIMITS,
     TIME_CONTROL_INCREMENT_MOVES,
     EngineCompatibility,
     FeatureConfig,
+    validate_feature_engine,
 )
-from .feature_schema import FEATURE_GROUPS, FEATURE_HASH, FEATURE_NAMES, SCHEMA_VERSION
+from .feature_schema import feature_schema
 from .features import GameFeatureExtractor
 from .game import GameInput, PositionAnalysis
 from .storage import write_json
@@ -49,15 +51,16 @@ class RatingPredictor:
         """
         directory = Path(directory)
         self.manifest = json.loads(
-            (directory / "model_manifest.json").read_text(encoding="utf-8")
+            (directory / MODEL_MANIFEST_FILENAME).read_text(encoding="utf-8")
         )
         names = json.loads(
             (directory / "feature_names.json").read_text(encoding="utf-8")
         )
+        self.schema = feature_schema(self.manifest["schema_version"])
         if (
-            names != list(FEATURE_NAMES)
-            or self.manifest["feature_hash"] != FEATURE_HASH
-            or self.manifest["schema_version"] != SCHEMA_VERSION
+            names != list(self.schema.names)
+            or self.manifest["feature_hash"] != self.schema.fingerprint
+            or self.manifest.get("feature_config", {}).get("schema_version") != self.schema.version
         ):
             raise ValueError(
                 "Artifact feature schema does not match this extraction code"
@@ -76,25 +79,26 @@ class RatingPredictor:
         self.extractor = GameFeatureExtractor(
             FeatureConfig(**self.manifest["feature_config"])
         )
+        validate_feature_engine(self.extractor.config, self.manifest.get("engine"))
 
     def predict(self, features, categories: list[str] | None = None) -> np.ndarray:
         """Predict ordered rows; separate models require a category per row.
 
         Args:
-            features: Numeric (n, 109) array or exactly ordered DataFrame; NaN is allowed.
+            features: Numeric (n, 93) array or exactly ordered DataFrame; NaN is allowed.
             categories: One trained time category per row for separate bundles.
 
         Returns:
             One floating-point rating per feature row.
         """
         if isinstance(features, pd.DataFrame) and list(features.columns) != list(
-            FEATURE_NAMES
+            self.schema.names
         ):
             raise ValueError("DataFrame columns must exactly match saved feature order")
         matrix = np.asarray(features, dtype=float)
         if (
             matrix.ndim != 2
-            or matrix.shape[1] != len(FEATURE_NAMES)
+            or matrix.shape[1] != len(self.schema.names)
             or np.isinf(matrix).any()
         ):
             raise ValueError(
@@ -233,7 +237,15 @@ def export_bundle(
         raise ValueError("model_version must not be empty")
     if not set(models).issubset({"pooled", *TIME_CATEGORIES}):
         raise ValueError("Invalid model names")
+    feature_config = feature_config or FeatureConfig()
+    schema = feature_schema(feature_config.schema_version)
+    validate_feature_engine(feature_config, metadata.get("engine"))
     directory = Path(directory)
+    existing = directory / MODEL_MANIFEST_FILENAME
+    if existing.exists():
+        previous = json.loads(existing.read_text(encoding="utf-8"))
+        if previous.get("engine") != metadata.get("engine") or previous["schema_version"] != schema.version:
+            raise ValueError("Export a different contract into a separate versioned directory")
     directory.mkdir(parents=True, exist_ok=True)
     files = {name: f"{name}.txt" for name in models}
     for name, model in models.items():
@@ -241,10 +253,18 @@ def export_bundle(
     manifest = {
         **metadata,
         "artifact_version": 1,
-        "schema_version": SCHEMA_VERSION,
-        "feature_hash": FEATURE_HASH,
+        "schema_version": schema.version,
+        "feature_hash": schema.fingerprint,
         "models": files,
-        "feature_config": asdict(feature_config or FeatureConfig()),
+        "feature_config": asdict(feature_config),
+        "package_version": "0.2.0",
+        "engine_compatibility_policy": "exact",
+        "analysis_contract": {
+            "engine": metadata.get("engine"),
+            "compatibility_policy": "exact",
+            "schema_version": schema.version,
+            "settings": metadata["engine"]["settings"],
+        },
         "time_category_rule": {
             "estimated_seconds": f"base + {TIME_CONTROL_INCREMENT_MOVES} * increment",
             "upper_bounds": dict(zip(TIME_CATEGORIES[:-1], TIME_CATEGORY_LIMITS[:-1])),
@@ -254,13 +274,13 @@ def export_bundle(
             for name in ("lightgbm", "numpy", "scikit-learn", "chess")
         },
     }
-    write_json(directory / "feature_names.json", FEATURE_NAMES)
+    write_json(directory / "feature_names.json", schema.names)
     if model_version is not None:
         manifest["model_version"] = model_version
-    write_json(directory / "feature_groups.json", FEATURE_GROUPS)
-    write_json(directory / "model_manifest.json", manifest)
+    write_json(directory / "feature_groups.json", schema.groups)
+    write_json(directory / MODEL_MANIFEST_FILENAME, manifest)
     predictor = RatingPredictor(directory)
-    matrix = sample.loc[:, list(FEATURE_NAMES)]
+    matrix = sample.loc[:, list(schema.names)]
     categories = sample["category"].tolist()
     expected = np.empty(len(sample))
     for name, model in models.items():

@@ -11,8 +11,13 @@ import pandas as pd
 from tqdm.auto import tqdm
 
 from .analysis import AnalysisCache, StockfishAnalyzer
-from .config import DEFAULT_ANALYSIS_WORKERS, EngineConfig, FeatureConfig
-from .feature_schema import FEATURE_HASH, FEATURE_NAMES, SCHEMA_VERSION
+from .config import (
+    DEFAULT_ANALYSIS_WORKERS,
+    EngineConfig,
+    FeatureConfig,
+    validate_feature_engine,
+)
+from .feature_schema import feature_schema
 from .features import GameFeatureExtractor
 from .game import GameInput
 from .split import PARTITIONS, assert_disjoint
@@ -82,7 +87,7 @@ def analyze_dataset(
 
     Args:
         games: Split manifest containing raw PGNs and eligible side masks.
-        config: Supplied executable and fixed-depth engine settings.
+        config: Supplied executable and bounded single-PV engine settings.
         cache_directory: Local Parquet analysis store.
         output: Destination analyzed manifest; engine provenance is a sidecar.
         progress: Display game progress and cumulative cache-hit counts; show
@@ -105,6 +110,10 @@ def analyze_dataset(
         metadata = analyzers[0].metadata
         if any(analyzer.metadata != metadata for analyzer in analyzers):
             raise ValueError("Analysis workers have inconsistent engine metadata")
+        sidecar = Path(output).with_suffix(".engine.json")
+        previous = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.exists() else metadata
+        if Path(output).exists() and previous != metadata:
+            raise ValueError("Use a separate analyzed manifest for each engine contract")
         write_json(Path(output).with_suffix(".engine.json"), metadata)
         executor = stack.enter_context(ThreadPoolExecutor(max_workers=len(analyzers)))
         pending = {}
@@ -156,6 +165,7 @@ def extract_dataset(
     cache_directory: str | Path,
     config: FeatureConfig | None = None,
     progress: bool = False,
+    engine_metadata: dict | None = None,
 ) -> pd.DataFrame:
     """Recompute fixed features entirely from cached engine output.
 
@@ -164,11 +174,13 @@ def extract_dataset(
         cache_directory: Existing analysis cache; missing records are errors.
         config: Feature transformations; defaults to versioned thresholds.
         progress: Display a game-level extraction bar, without running Stockfish.
+        engine_metadata: Expected engine contract; required for fast schemas.
 
     Returns:
         Eligible numeric side rows with labels/identities in separate columns.
     """
     extractor = GameFeatureExtractor(config)
+    validate_feature_engine(extractor.config, engine_metadata)
     cache = AnalysisCache(cache_directory)
     records = []
     for game in tqdm(
@@ -177,19 +189,21 @@ def extract_dataset(
         unit="game",
         disable=not progress,
     ):
+        parsed = GameInput.from_pgn(game["pgn"])
+        if engine_metadata is not None and cache.key(parsed, engine_metadata) != game["analysis_key"]:
+            raise ValueError("Analysis cache key does not match the requested engine contract")
         analysis = cache.load(game["analysis_key"])
         if analysis is None:
             raise ValueError(
                 f"Missing cached analysis for {game['game_id']}; run analyze first"
             )
-        parsed = GameInput.from_pgn(game["pgn"])
         matrix = extractor.extract(parsed, analysis)
         for index, color in enumerate(("white", "black")):
             if not game[f"keep_{color}"]:
                 continue
             records.append(
                 {
-                    **dict(zip(FEATURE_NAMES, matrix[index])),
+                    **dict(zip(extractor.schema.names, matrix[index])),
                     "game_id": game["game_id"],
                     "partition": game["partition"],
                     "target_username": game[f"{color}_username"].strip().casefold(),
@@ -200,7 +214,7 @@ def extract_dataset(
     frame = pd.DataFrame(
         records,
         columns=(
-            *FEATURE_NAMES,
+            *extractor.schema.names,
             "game_id",
             "partition",
             "target_username",
@@ -229,13 +243,18 @@ def save_feature_dataset(
     Returns:
         None; writes Parquet plus a strict JSON metadata sidecar.
     """
+    config = config or FeatureConfig()
+    schema = feature_schema(config.schema_version)
+    validate_feature_engine(config, engine_metadata)
+    if not set(schema.names).issubset(frame.columns):
+        raise ValueError("Feature table does not match its schema")
     write_parquet(output, frame)
     write_json(
         Path(output).with_suffix(".metadata.json"),
         {
-            "schema_version": SCHEMA_VERSION,
-            "feature_hash": FEATURE_HASH,
-            "feature_config": asdict(config or FeatureConfig()),
+            "schema_version": schema.version,
+            "feature_hash": schema.fingerprint,
+            "feature_config": asdict(config),
             "engine": engine_metadata,
         },
     )
@@ -253,12 +272,11 @@ def load_feature_metadata(path: str | Path) -> dict:
     metadata = json.loads(
         Path(path).with_suffix(".metadata.json").read_text(encoding="utf-8")
     )
-    if (
-        metadata["schema_version"] != SCHEMA_VERSION
-        or metadata["feature_hash"] != FEATURE_HASH
-    ):
+    schema = feature_schema(metadata["schema_version"])
+    config = FeatureConfig(**metadata["feature_config"])
+    if config.schema_version != schema.version or metadata["feature_hash"] != schema.fingerprint:
         raise ValueError("Feature metadata schema mismatch")
-    FeatureConfig(**metadata["feature_config"])
+    validate_feature_engine(config, metadata.get("engine"))
     return metadata
 
 
@@ -287,16 +305,18 @@ def export_sample(frame: pd.DataFrame, models: dict, limit: int = 64) -> pd.Data
     return sample
 
 
-def feature_missingness(frame: pd.DataFrame) -> dict:
+def feature_missingness(frame: pd.DataFrame, schema_version: int = 2) -> dict:
     """Report absent features explicitly so sparse phases are visible.
 
     Args:
         frame: Side feature rows in the saved schema.
+        schema_version: Feature contract used to construct the table.
 
     Returns:
         Feature-to-missing-fraction mapping; empty tables use None.
     """
-    matrix = frame.loc[:, list(FEATURE_NAMES)].to_numpy(dtype=float)
+    names = feature_schema(schema_version).names
+    matrix = frame.loc[:, list(names)].to_numpy(dtype=float)
     if not len(matrix):
-        return dict.fromkeys(FEATURE_NAMES, None)
-    return dict(zip(FEATURE_NAMES, np.isnan(matrix).mean(axis=0).tolist()))
+        return dict.fromkeys(names, None)
+    return dict(zip(names, np.isnan(matrix).mean(axis=0).tolist()))
