@@ -50,17 +50,18 @@ class TrainingTests(unittest.TestCase):
             None; expanded intervals, counts and signed bias are asserted.
         """
         frame = pd.DataFrame({
-            "rating": [99, 100, 349, 350, 3349, 3350, 3500, 3501],
+            "rating": [99, 100, 349, 350, 2349, 2350, 2600, 2601],
             "target_username": [f"player{index}" for index in range(8)],
             "category": ["blitz"] * 8,
         })
         self.assertEqual(list(rating_bands(frame["rating"], expanded=True)), [
-            "<100", "100-350", "100-350", "350-600", "3100-3350",
-            "3350-3500", "3350-3500", ">3500",
+            "<100", "100-350", "100-350", "350-600", "2100-2350",
+            "2350-2600", "2350-2600", ">2600",
         ])
         report = evaluate(frame, frame["rating"].to_numpy() + 25)
         self.assertEqual(report["overall"]["signed_bias"], 25)
-        self.assertEqual(report["by_expanded_rating_band"]["3350-3500"]["rows"], 2)
+        self.assertEqual(report["by_expanded_rating_band"]["2350-2600"]["rows"], 2)
+        self.assertEqual(report["by_expanded_rating_band"][">2600"]["rows"], 1)
         empty = report["by_rating_band_category"]["100-350"]["rapid"]
         self.assertEqual(empty["rows"], 0)
         self.assertEqual(empty["players"], 0)

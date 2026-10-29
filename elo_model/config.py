@@ -19,13 +19,16 @@ TIME_CATEGORY_LIMITS = (180, 600, 3600, math.inf)
 TIME_CONTROL_INCREMENT_MOVES = 40
 RATING_BAND_EDGES = (0, 1000, 1400, 1800, 2200, math.inf)
 RATING_BAND_NAMES = ("<1000", "1000-1400", "1400-1800", "1800-2200", "2200+")
-EXPANDED_RATING_EDGES = (*range(100, 3351, 250), 3501)
+EXPANDED_MAX_RATING = 2600
+EXPANDED_RATING_EDGES = (*range(100, EXPANDED_MAX_RATING, 250), EXPANDED_MAX_RATING + 1)
+EXPANDED_DISCOVERY_PLAYERS_PER_BAND = 300
 EXPANDED_CATEGORY_ROWS = {"blitz": 1000, "rapid": 500, "bullet": 500}
 EXPANDED_REPORT_EDGES = (0, *EXPANDED_RATING_EDGES, math.inf)
 EXPANDED_REPORT_NAMES = (
     "<100",
-    *(f"{lower}-{3500 if upper == 3501 else upper}" for lower, upper in pairwise(EXPANDED_RATING_EDGES)),
-    ">3500",
+        *(f"{lower}-{EXPANDED_MAX_RATING if upper == EXPANDED_MAX_RATING + 1 else upper}"
+            for lower, upper in pairwise(EXPANDED_RATING_EDGES)),
+        f">{EXPANDED_MAX_RATING}",
 )
 PIECE_VALUES = {
     chess.PAWN: 100,
@@ -562,7 +565,7 @@ class PipelineConfig:
             None.
 
         Returns:
-            Settings for 28,000 training rows and six recent archive months.
+            Settings for 20,000 training rows and six recent archive months.
         """
         today = datetime.now(UTC).date()
         month_index = today.year * 12 + today.month - 1
@@ -578,6 +581,7 @@ class PipelineConfig:
             artifact_directory=Path("artifacts/rating_model_expanded"),
             training_directory=Path("runs/expanded"),
             discovery_enabled=True,
+            discovery_seed_usernames=("Hikaru", "GothamChess"),
             discovery_month_limit=1,
             min_training_group_players=100,
             min_holdout_group_players=20,
@@ -585,8 +589,10 @@ class PipelineConfig:
                 months=months,
                 max_games_per_player=10,
                 search_band_edges=(0, *EXPANDED_RATING_EDGES),
-                search_band_quotas=(0, *(300 for _ in range(14)), 0),
-                search_max_players=4200,
+                search_band_quotas=(
+                    0, *(EXPANDED_DISCOVERY_PLAYERS_PER_BAND for _ in pairwise(EXPANDED_RATING_EDGES)), 0,
+                ),
+                search_max_players=EXPANDED_DISCOVERY_PLAYERS_PER_BAND * (len(EXPANDED_RATING_EDGES) - 1),
                 search_max_expansions=3000,
                 search_stagnation_expansions=500,
                 archive_cache_directory=Path("data/archive_cache"),

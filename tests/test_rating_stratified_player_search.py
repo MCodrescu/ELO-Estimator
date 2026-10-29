@@ -57,6 +57,41 @@ def game(
 
 
 class RatingStratifiedPlayerSearchTests(unittest.TestCase):
+    def test_notebook_progress_reuses_one_output_and_throttles_updates(self):
+        """Keep one persistent notebook display without rapid stream redraws.
+
+        Args:
+            None.
+
+        Returns:
+            None; stable display identity, throttling and final content are checked.
+        """
+        with (
+            patch("training_data.discovery_progress.get_ipython", return_value=SimpleNamespace(kernel=object())),
+            patch("training_data.discovery_progress.display") as render,
+            patch("training_data.discovery_progress.monotonic", return_value=0) as clock,
+        ):
+            with DiscoveryProgress("blitz", {"100-349": 3}, 10, True) as progress:
+                render.assert_called_once()
+                self.assertTrue(render.call_args.kwargs["display_id"])
+                handle = render.return_value
+                clock.return_value = 0.1
+                progress.update("Alice", {"100-349": 1})
+                handle.update.assert_not_called()
+                clock.return_value = 1.1
+                progress.update("<Bob>", {"100-349": 2})
+                handle.update.assert_called_once()
+                content = handle.update.call_args.args[0].data
+                self.assertIn("Remaining: 1", content)
+                self.assertIn("&lt;Bob&gt;", content)
+                self.assertNotIn("<Bob>", content)
+                progress.finish("expansion budget reached")
+            render.assert_called_once()
+            content = handle.update.call_args.args[0].data
+            self.assertIn("expansion budget reached", content)
+            self.assertIn("Remaining: 1", content)
+            self.assertIn("Archives processed: 2/10", content)
+
     def test_quota_progress_remaining_counts_and_uncertain_eta(self):
         """Keep rare-band uncertainty and partial-stop shortages visible.
 

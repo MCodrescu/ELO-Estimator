@@ -39,15 +39,16 @@ tunes LightGBM on validation rows and reports held-out errors before export.
 The notebook now selects `PipelineConfig.expanded()`. This leaves the original
 configuration and released model unchanged and uses these targets:
 
-- 14 training bands: `[100,350)`, `[350,600)`, through `[3100,3350)`,
-    then `[3350,3501)` to include rating 3500.
+- 10 training bands: `[100,350)`, `[350,600)`, through `[2100,2350)`,
+    then `[2350,2601)` to include rating 2600. Higher ratings have no discovery
+    or training quota; out-of-range search bridges and holdout diagnostics remain.
 - Per band: 1,000 blitz, 500 rapid and 500 bullet player-side training rows,
-    totaling 28,000 rows. Classical training is deferred.
+    totaling 20,000 rows. Classical training is deferred.
 - At most 10 selected training rows per player across all quota groups.
 - 60,000 candidate games from the current month and five preceding months.
 - Discovery targets 300 usernames per band per time class, with at most
-    3,000 archive-owner expansions per class. These are bounded targets, not
-    guarantees, particularly above 3100.
+    3,000 archive-owner expansions per class (3,000 accepted usernames).
+    These are bounded targets, not guarantees.
 
 Restart the kernel, then run **Cells 1-5 first**. Cell 2 seeds separate blitz,
 rapid and bullet searches using up to 200 shuffled existing usernames plus the
