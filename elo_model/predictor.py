@@ -1,4 +1,4 @@
-"""Native LightGBM bundles for fast Python inference, without pickle or engines."""
+"""Native LightGBM and weights-only PyTorch bundles for shared rating inference."""
 
 import json
 import os
@@ -25,6 +25,7 @@ from .config import (
 from .feature_schema import feature_schema
 from .features import GameFeatureExtractor
 from .game import GameInput, PositionAnalysis
+from .neural_model import TorchRatingModel
 from .storage import write_json
 
 
@@ -66,11 +67,14 @@ class RatingPredictor:
                 "Artifact feature schema does not match this extraction code"
             )
         self.models = {}
+        backend = self.manifest.get("model_backend", "lightgbm")
+        if backend not in ("lightgbm", "pytorch"):
+            raise ValueError(f"Unsupported model backend: {backend}")
         for name, filename in self.manifest["models"].items():
             path = directory / filename
             if path.resolve().parent != directory.resolve():
                 raise ValueError("Model file must be inside the artifact directory")
-            model = lgb.Booster(model_file=str(path))
+            model = TorchRatingModel.load(path) if backend == "pytorch" else lgb.Booster(model_file=str(path))
             if model.feature_name() != names:
                 raise ValueError("Booster feature names disagree with the saved schema")
             self.models[name] = model
@@ -188,10 +192,10 @@ class RatingPredictor:
 
 
 def _save_booster(model, path: Path) -> None:
-    """Atomically save only the selected LightGBM iterations.
+    """Atomically save the selected native tree or neural checkpoint.
 
     Args:
-        model: Native booster, optionally with a selected best iteration.
+        model: Native booster or neural model with a selected training iteration.
         path: Destination text model path in an existing directory.
 
     Returns:
@@ -217,10 +221,10 @@ def export_bundle(
     feature_config: FeatureConfig | None = None,
     model_version: str | None = None,
 ) -> dict:
-    """Save native trees and verify reloaded predictions on supplied sample rows.
+    """Save model weights and verify reloaded predictions on supplied sample rows.
 
     Args:
-        models: Pooled or category-name to native booster mapping.
+        models: Pooled or category-name to native booster or neural model mapping.
         directory: Output artifact directory.
         sample: Held-out feature rows, with category metadata for routing.
         metadata: Training, engine and target provenance for the manifest.
@@ -237,6 +241,12 @@ def export_bundle(
         raise ValueError("model_version must not be empty")
     if not set(models).issubset({"pooled", *TIME_CATEGORIES}):
         raise ValueError("Invalid model names")
+    backends = {"pytorch" if isinstance(model, TorchRatingModel) else "lightgbm" for model in models.values()}
+    if len(backends) != 1:
+        raise ValueError("Export requires nonempty models with a single backend")
+    backend = backends.pop()
+    if metadata.get("model_backend", backend) != backend:
+        raise ValueError("Model backend disagrees with training metadata")
     feature_config = feature_config or FeatureConfig()
     schema = feature_schema(feature_config.schema_version)
     validate_feature_engine(feature_config, metadata.get("engine"))
@@ -246,13 +256,17 @@ def export_bundle(
         previous = json.loads(existing.read_text(encoding="utf-8"))
         if previous.get("engine") != metadata.get("engine") or previous["schema_version"] != schema.version:
             raise ValueError("Export a different contract into a separate versioned directory")
+        if previous.get("model_backend", "lightgbm") != backend:
+            raise ValueError("Export a different model backend into a separate directory")
     directory.mkdir(parents=True, exist_ok=True)
-    files = {name: f"{name}.txt" for name in models}
+    extension = "pt" if backend == "pytorch" else "txt"
+    files = {name: f"{name}.{extension}" for name in models}
     for name, model in models.items():
         _save_booster(model, directory / files[name])
     manifest = {
         **metadata,
         "artifact_version": 1,
+        "model_backend": backend,
         "schema_version": schema.version,
         "feature_hash": schema.fingerprint,
         "models": files,
@@ -271,7 +285,7 @@ def export_bundle(
         },
         "libraries": {
             name: version(name)
-            for name in ("lightgbm", "numpy", "scikit-learn", "chess")
+            for name in ("torch" if backend == "pytorch" else "lightgbm", "numpy", "scikit-learn", "chess")
         },
     }
     write_json(directory / "feature_names.json", schema.names)
@@ -291,7 +305,10 @@ def export_bundle(
         )
         expected[mask] = model.predict(matrix.loc[mask], num_threads=1)
     actual = predictor.predict(matrix, categories)
-    np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-9)
+    if backend == "pytorch":
+        np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-4)
+    else:
+        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-9)
     predictor.predict(matrix.iloc[:1], categories[:1])
     started = time.perf_counter()
     for _ in range(30):

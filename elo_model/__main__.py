@@ -14,15 +14,19 @@ from .analysis import analysis_from_payload
 from .config import (
     CLI_CONFIG,
     DEFAULT_ANALYSIS_WORKERS,
+    NEURAL_ARTIFACT_DIRECTORY,
+    NEURAL_TRAINING_DIRECTORY,
     DatasetConfig,
     EngineConfig,
     FeatureConfig,
+    NeuralTrainingConfig,
     StratificationConfig,
     TrainingConfig,
 )
 from .evaluation import BAND_NAMES, rating_bands
 from .feature_schema import feature_schema
 from .game import GameInput
+from .neural_training import TorchModelTrainer
 from .pipeline import (
     analyze_dataset,
     export_sample,
@@ -200,17 +204,23 @@ def run_train(args):
     """
     frame = pd.read_parquet(args.input)
     metadata = load_feature_metadata(args.input)
-    config = TrainingConfig(
-        mode=args.mode,
-        trials=args.trials,
-        seed=args.seed,
-        max_trees=args.max_trees,
-        min_rows=args.min_rows,
-        balance_bands=args.balance_bands,
-        balance_players=args.balance_players,
-        threads=args.threads,
-    )
-    result = ModelTrainer(config, FeatureConfig(**metadata["feature_config"])).fit(frame)
+    feature_config = FeatureConfig(**metadata["feature_config"])
+    common = {
+        "mode": args.mode, "seed": args.seed, "min_rows": args.min_rows,
+        "balance_bands": args.balance_bands, "balance_players": args.balance_players,
+        "threads": args.threads,
+    }
+    if args.backend == "pytorch":
+        config = NeuralTrainingConfig(
+            **common, hidden_sizes=tuple(args.hidden_sizes), dropout=args.dropout,
+            learning_rate=args.learning_rate, weight_decay=args.weight_decay,
+            batch_size=args.batch_size, max_epochs=args.max_epochs,
+            patience=args.patience, device=args.device, progress=args.progress,
+        )
+        result = TorchModelTrainer(config, feature_config).fit(frame)
+    else:
+        config = TrainingConfig(**common, trials=args.trials, max_trees=args.max_trees)
+        result = ModelTrainer(config, feature_config).fit(frame)
     result.metadata.update(metadata)
     sample = export_sample(frame, result.models)
     verification = export_bundle(
@@ -224,8 +234,8 @@ def run_train(args):
     )
     for name, report in result.report.items():
         for partition in ("validation", "test"):
-            for estimator in ("lightgbm", "ridge"):
-                metrics = report["partitions"][partition][estimator]["overall"]
+            for estimator, evaluation in report["partitions"][partition].items():
+                metrics = evaluation["overall"]
                 print(
                     f"{name} {partition} {estimator}: MAE={metrics['mae']:.1f}, RMSE={metrics['rmse']:.1f}"
                 )
@@ -366,7 +376,8 @@ def parser() -> argparse.ArgumentParser:
         "train", help="Tune, evaluate, and save native Python models"
     )
     train.add_argument("--input", default=DEFAULT_FEATURES)
-    train.add_argument("--output", default=str(CLI_CONFIG.training_directory))
+    train.add_argument("--output", default=str(NEURAL_TRAINING_DIRECTORY))
+    train.add_argument("--backend", choices=("pytorch", "lightgbm"), default="pytorch")
     train.add_argument("--mode", choices=("pooled", "separate"), default=CLI_CONFIG.training.mode)
     train.add_argument("--trials", type=int, default=CLI_CONFIG.training.trials)
     train.add_argument("--max-trees", type=int, default=CLI_CONFIG.training.max_trees)
@@ -374,15 +385,27 @@ def parser() -> argparse.ArgumentParser:
     train.add_argument("--threads", type=int, default=CLI_CONFIG.training.threads)
     train.add_argument("--seed", type=int, default=CLI_CONFIG.training.seed)
     train.add_argument("--balance-bands", action="store_true")
-    train.add_argument("--balance-players", action="store_true")
+    train.add_argument(
+        "--balance-players", action=argparse.BooleanOptionalAction,
+        default=CLI_CONFIG.neural_training.balance_players,
+    )
+    train.add_argument("--hidden-sizes", type=int, nargs="+", default=CLI_CONFIG.neural_training.hidden_sizes)
+    train.add_argument("--dropout", type=float, default=CLI_CONFIG.neural_training.dropout)
+    train.add_argument("--learning-rate", type=float, default=CLI_CONFIG.neural_training.learning_rate)
+    train.add_argument("--weight-decay", type=float, default=CLI_CONFIG.neural_training.weight_decay)
+    train.add_argument("--batch-size", type=int, default=CLI_CONFIG.neural_training.batch_size)
+    train.add_argument("--max-epochs", type=int, default=CLI_CONFIG.neural_training.max_epochs)
+    train.add_argument("--patience", type=int, default=CLI_CONFIG.neural_training.patience)
+    train.add_argument("--device", choices=("cpu", "cuda", "auto"), default=CLI_CONFIG.neural_training.device)
+    train.add_argument("--progress", action="store_true")
     train.add_argument("--model-version", help="Release label for the exported weights")
     train.set_defaults(handler=run_train)
 
     export = commands.add_parser(
         "export", help="Export/reverify a trained native model bundle"
     )
-    export.add_argument("--source", default=str(CLI_CONFIG.training_directory))
-    export.add_argument("--output", default=str(CLI_CONFIG.artifact_directory))
+    export.add_argument("--source", default=str(NEURAL_TRAINING_DIRECTORY))
+    export.add_argument("--output", default=str(NEURAL_ARTIFACT_DIRECTORY))
     export.add_argument("--sample-features", default=DEFAULT_FEATURES)
     export.add_argument("--model-version", help="Release label; retains source version when omitted")
     export.set_defaults(handler=run_export)
@@ -390,7 +413,7 @@ def parser() -> argparse.ArgumentParser:
     predict = commands.add_parser(
         "predict", help="Predict from ordered features or PGN plus analysis"
     )
-    predict.add_argument("--model", default=str(CLI_CONFIG.artifact_directory))
+    predict.add_argument("--model", default=str(NEURAL_ARTIFACT_DIRECTORY))
     inputs = predict.add_mutually_exclusive_group(required=True)
     inputs.add_argument("--features")
     inputs.add_argument("--pgn")

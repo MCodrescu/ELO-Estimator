@@ -25,6 +25,7 @@ def replace_checkpoint(source: Path, destination: Path) -> None:
         None; persistent permissions errors and all other failures propagate.
     """
     settings = StorageConfig()
+    delay = settings.retry_delay
 
     for attempt in range(settings.replace_attempts):
         try:
@@ -41,7 +42,8 @@ def replace_checkpoint(source: Path, destination: Path) -> None:
                 settings.replace_attempts - 1,
                 error,
             )
-            time.sleep(settings.retry_delay)
+            time.sleep(delay)
+            delay = min(delay * settings.retry_backoff, settings.max_retry_delay)
 
 
 def write_json(path: str | Path, payload) -> None:
@@ -80,7 +82,7 @@ def write_parquet(path: str | Path, frame: pd.DataFrame) -> None:
         frame: Rows to persist without a pandas index.
 
     Returns:
-        None; temporary files are cleaned even on failure.
+        None; completed temporary files are retained for recovery if replacement fails.
     """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -88,8 +90,18 @@ def write_parquet(path: str | Path, frame: pd.DataFrame) -> None:
         dir=path.parent, delete=False, suffix=".parquet"
     ) as handle:
         temporary = Path(handle.name)
+    complete = False
+    replaced = False
     try:
         frame.to_parquet(temporary, index=False)
+        complete = True
         replace_checkpoint(temporary, path)
+        replaced = True
     finally:
-        temporary.unlink(missing_ok=True)
+        if not complete or replaced:
+            temporary.unlink(missing_ok=True)
+        else:
+            logger.error(
+                "Checkpoint replacement failed for %s. Completed recovery file retained at %s",
+                path, temporary,
+            )

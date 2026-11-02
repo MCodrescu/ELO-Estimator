@@ -8,10 +8,12 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import torch
 
-from elo_model.config import EngineConfig, FeatureConfig
+from elo_model.config import EngineConfig, FeatureConfig, NeuralTrainingConfig
 from elo_model.evaluation import evaluate, rating_bands, sample_weights
 from elo_model.feature_schema import FEATURE_NAMES
+from elo_model.neural_training import TorchModelTrainer
 from elo_model.predictor import RatingPredictor, export_bundle
 from elo_model.training import ModelTrainer, TrainingConfig
 from tests.test_features import sample_engine_metadata
@@ -40,6 +42,84 @@ def synthetic_frame():
 
 
 class TrainingTests(unittest.TestCase):
+    def test_neural_separate_models_and_deterministic_preprocessing(self):
+        """Keep holdout statistics out of training and route separate checkpoints.
+
+        Args:
+            None.
+
+        Returns:
+            None; repeatability, preprocessing isolation and category routing are asserted.
+        """
+        frame = synthetic_frame()
+        config = NeuralTrainingConfig(
+            mode="separate", hidden_sizes=(8,), max_epochs=2, min_rows=10,
+            batch_size=32, progress=False,
+        )
+        previous_threads = torch.get_num_threads()
+        previous_random = torch.random.get_rng_state().clone()
+        result = TorchModelTrainer(config).fit(frame)
+        self.assertEqual(torch.get_num_threads(), previous_threads)
+        self.assertTrue(torch.equal(torch.random.get_rng_state(), previous_random))
+        changed = frame.copy()
+        changed.loc[changed["partition"] != "train", "self_loss_mean"] = 10000
+        repeated = TorchModelTrainer(config).fit(frame)
+        shifted = TorchModelTrainer(config).fit(changed)
+        for category, model in result.models.items():
+            self.assertEqual(model.preprocessing, shifted.models[category].preprocessing)
+            rows = frame.loc[frame["category"] == category, list(FEATURE_NAMES)]
+            np.testing.assert_array_equal(model.predict(rows), repeated.models[category].predict(rows))
+        result.metadata["engine"] = sample_engine_metadata()
+        with tempfile.TemporaryDirectory() as directory:
+            export_bundle(result.models, directory, frame.iloc[-10:], result.metadata, result.report)
+            predictor = RatingPredictor(directory)
+            sample = frame.iloc[-10:]
+            actual = predictor.predict(sample.loc[:, list(FEATURE_NAMES)], sample["category"].tolist())
+            self.assertTrue(np.isfinite(actual).all())
+            with self.assertRaisesRegex(ValueError, "category"):
+                predictor.predict(sample.loc[:, list(FEATURE_NAMES)])
+            with self.assertRaisesRegex(ValueError, "category"):
+                predictor.predict(sample.loc[:, list(FEATURE_NAMES)], ["bullet"] * len(sample))
+
+    def test_neural_train_and_export_roundtrip(self):
+        """Verify neural preprocessing, validation selection and portable predictions.
+
+        Args:
+            None.
+
+        Returns:
+            None; train-only statistics, reports and reload parity are asserted.
+        """
+        frame = synthetic_frame()
+        config = NeuralTrainingConfig(
+            hidden_sizes=(16, 8), max_epochs=3, patience=2, min_rows=10,
+            batch_size=32, progress=False,
+        )
+        result = TorchModelTrainer(config).fit(frame)
+        model = result.models["pooled"]
+        train = frame.loc[frame["partition"] == "train"]
+        self.assertAlmostEqual(model.preprocessing.target_mean, train["rating"].mean())
+        missing_index = list(FEATURE_NAMES).index("self_endgame_loss_mean")
+        self.assertEqual(model.preprocessing.medians[missing_index], 0)
+        report = result.report["pooled"]
+        self.assertEqual(report["best_validation_mae"], min(
+            epoch["validation_mae"] for epoch in report["history"]
+        ))
+        self.assertEqual(report["partitions"]["test"]["pytorch"]["overall"]["rows"], 40)
+        result.metadata["engine"] = sample_engine_metadata()
+        with tempfile.TemporaryDirectory() as directory:
+            verification = export_bundle(
+                result.models, directory, frame.iloc[-10:], result.metadata, result.report,
+            )
+            self.assertLessEqual(verification["max_absolute_difference"], 1e-3)
+            predictor = RatingPredictor(directory)
+            self.assertEqual(predictor.manifest["model_backend"], "pytorch")
+            self.assertEqual(predictor.manifest["models"], {"pooled": "pooled.pt"})
+            actual = predictor.predict(frame.loc[:4, list(FEATURE_NAMES)])
+            np.testing.assert_allclose(
+                actual, model.predict(frame.loc[:4, list(FEATURE_NAMES)]), rtol=1e-6, atol=1e-4,
+            )
+
     def test_expanded_report_boundaries_bias_and_empty_categories(self):
         """Keep exact edge ratings and sparse category groups visible.
 

@@ -13,19 +13,27 @@ from threading import Barrier, get_ident
 from unittest.mock import MagicMock, Mock, patch
 
 import pandas as pd
+from tqdm.auto import tqdm
 
 from elo_model.__main__ import main
 from elo_model.analysis import AnalysisCache
+from elo_model.analysis_progress import AnalysisTiming
 from elo_model.config import (
     EngineConfig,
     FeatureConfig,
+    NeuralTrainingConfig,
     PipelineConfig,
     RatingQuota,
     StratificationConfig,
     TrainingConfig,
 )
 from elo_model.game import GameInput
-from elo_model.pipeline import analyze_dataset, extract_dataset, save_feature_dataset
+from elo_model.pipeline import (
+    _timed_analysis,
+    analyze_dataset,
+    extract_dataset,
+    save_feature_dataset,
+)
 from elo_model.split import PlayerSplitter
 from elo_model.storage import replace_checkpoint, write_json, write_parquet
 from tests.test_features import PGN, sample_analysis, sample_engine_metadata
@@ -35,6 +43,93 @@ from training_data.model_dataset import training_record
 
 
 class PipelineTests(unittest.TestCase):
+    def test_analysis_timing_recognizes_already_cached_tasks(self):
+        """Exclude existing cache files from pending work before scheduling.
+
+        Args:
+            None.
+
+        Returns:
+            None; an all-cached run has no fresh timing sample or remaining work.
+        """
+        metadata = {"engine": "cached-timing-test"}
+        games = pd.DataFrame({"pgn": [PGN, PGN]})
+        with tempfile.TemporaryDirectory() as directory:
+            cache = AnalysisCache(directory)
+            cache.save(cache.key(GameInput.from_pgn(PGN), metadata), [])
+            timing = AnalysisTiming(games, cache, metadata, workers=8)
+            self.assertFalse(timing.pending)
+            status = timing.record(0, cached=True, seconds=100)
+            self.assertEqual(status["fresh_s_per_game"], "unknown")
+            self.assertEqual(status["fresh_remaining"], 0)
+            self.assertEqual(status["fresh_ETA"], "00:00")
+
+    def test_analysis_timing_excludes_cached_game_duration(self):
+        """Measure fresh worker time without counting cache-hit duration.
+
+        Args:
+            None.
+
+        Returns:
+            None; cache classification and fresh-only timing are asserted.
+        """
+        analyzer = Mock(cache_hits=0)
+        analyzer.analyze.return_value = ("fresh-key", [])
+        game = GameInput.from_pgn(PGN)
+        with patch("elo_model.pipeline.monotonic", side_effect=[10, 22]):
+            self.assertEqual(_timed_analysis(analyzer, game, False), ("fresh-key", False, 12))
+
+        def cached_analysis(game, progress=False):
+            """Simulate a cache hit on the worker-local analyzer.
+
+            Args:
+                game: Parsed input, unused by this cache fixture.
+                progress: Display preference, unused by this cache fixture.
+
+            Returns:
+                Cached analysis key and unused position records.
+            """
+            analyzer.cache_hits += 1
+            return "cached-key", []
+
+        analyzer.analyze.side_effect = cached_analysis
+        with patch("elo_model.pipeline.monotonic", return_value=100) as clock:
+            self.assertEqual(_timed_analysis(analyzer, game, False), ("cached-key", True, 0))
+            clock.assert_called_once()
+
+    def test_analysis_eta_counts_only_uncached_remaining_tasks(self):
+        """Keep cached completions out of both the average and remaining work.
+
+        Args:
+            None.
+
+        Returns:
+            None; mixed cached/fresh snapshots retain a fresh-only average and ETA.
+        """
+        analyzer = MagicMock(metadata={"engine": "timing-test"}, cache_hits=0)
+        analyzer.__enter__.return_value = analyzer
+        games = pd.DataFrame({"game_id": [0, 1, 2], "pgn": [PGN] * 3})
+        bar = MagicMock()
+        bar.__enter__.return_value = bar
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("elo_model.pipeline.StockfishAnalyzer", return_value=analyzer),
+            patch("elo_model.pipeline._timed_analysis", side_effect=[
+                ("cached-key", True, 0), ("fresh-key", False, 8), ("fresh-key", False, 12),
+            ]),
+            patch("elo_model.pipeline.tqdm", return_value=bar),
+        ):
+            analyze_dataset(games, EngineConfig("mock"), directory, Path(directory) / "out.parquet", workers=1)
+        snapshots = [call.args[0] for call in bar.set_postfix.call_args_list]
+        self.assertEqual(snapshots[0]["fresh_s_per_game"], "unknown")
+        self.assertEqual(snapshots[0]["fresh_remaining"], 2)
+        self.assertEqual(snapshots[1]["fresh_s_per_game"], "8.00")
+        self.assertEqual(snapshots[1]["fresh_remaining"], 1)
+        self.assertEqual(snapshots[1]["fresh_ETA"], "00:08")
+        self.assertEqual(snapshots[2]["fresh_s_per_game"], "10.00")
+        self.assertEqual(snapshots[2]["fresh_ETA"], "00:00")
+        self.assertEqual(snapshots[2]["cached"], 1)
+
     def test_fast_extraction_rejects_mixed_contract_cache_keys(self):
         """Reject references to legacy scores before extracting fast features.
 
@@ -135,11 +230,35 @@ class PipelineTests(unittest.TestCase):
             output = Path(directory) / "analyzed.parquet"
             with (
                 patch("elo_model.pipeline.StockfishAnalyzer", return_value=analyzer),
+                patch("elo_model.pipeline.tqdm", wraps=tqdm) as progress_bar,
                 self.assertRaisesRegex(RuntimeError, "engine failed"),
             ):
                 analyze_dataset(games, config, directory, output, workers=1)
             self.assertEqual(pd.read_parquet(output)["game_id"].tolist(), [0])
             analyzer.__exit__.assert_called_once()
+            self.assertEqual(progress_bar.call_args.kwargs["smoothing"], 0)
+            self.assertEqual(progress_bar.call_args.kwargs["mininterval"], 1)
+            self.assertEqual(progress_bar.call_args.kwargs["miniters"], 1)
+
+    def test_analysis_progress_cumulative_rate_ignores_completion_bursts(self):
+        """Use elapsed time across the run instead of the latest completion burst.
+
+        Args:
+            None.
+
+        Returns:
+            None; cumulative seconds per game is checked with a controlled clock.
+        """
+        with tqdm(total=20, unit="game", smoothing=0, mininterval=0, file=io.StringIO()) as bar:
+            clock = Mock(return_value=10)
+            bar._time = clock
+            bar.start_t = 0
+            bar.last_print_t = 0
+            bar.update(2)
+            self.assertIn("5.00s/game", str(bar))
+            clock.return_value = 20
+            bar.update(8)
+            self.assertIn("2.00s/game", str(bar))
 
     def test_cli_analysis_worker_count(self):
         """Forward default and overridden CLI worker counts to analysis.
@@ -229,6 +348,36 @@ class PipelineTests(unittest.TestCase):
                 self.assertEqual(analyzer.analyze.call_count, 2)
                 analyzer.__exit__.assert_called_once()
 
+    def test_locked_parquet_checkpoint_preserves_old_and_recovery_data(self):
+        """Keep the old checkpoint and latest complete data when locks persist.
+
+        Args:
+            None.
+
+        Returns:
+            None; retained snapshots remain readable and recovery replacement works.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "games.parquet"
+            previous = pd.DataFrame({"game_id": ["old"]})
+            latest = pd.DataFrame({"game_id": ["old", "new"]})
+            write_parquet(path, previous)
+            with (
+                patch("elo_model.storage.os.replace", side_effect=PermissionError("permanent lock")),
+                patch("elo_model.storage.time.sleep"),
+                self.assertLogs("elo_model.storage", level="WARNING") as logs,
+                self.assertRaisesRegex(PermissionError, "permanent lock"),
+            ):
+                write_parquet(path, latest)
+            pd.testing.assert_frame_equal(pd.read_parquet(path), previous)
+            recovery = [candidate for candidate in Path(directory).glob("*.parquet") if candidate != path]
+            self.assertEqual(len(recovery), 1)
+            pd.testing.assert_frame_equal(pd.read_parquet(recovery[0]), latest)
+            self.assertIn("Completed recovery file retained", logs.output[-1])
+            replace_checkpoint(recovery[0], path)
+            pd.testing.assert_frame_equal(pd.read_parquet(path), latest)
+            self.assertFalse(recovery[0].exists())
+
     def test_transient_checkpoint_locks_are_retried(self):
         """Retry only permissions failures and propagate a permanent lock.
 
@@ -247,6 +396,15 @@ class PipelineTests(unittest.TestCase):
 
         self.assertEqual(replace_file.call_count, 2)
         backoff.assert_called_once()
+
+        with (
+            patch("elo_model.storage.os.replace", side_effect=[PermissionError("locked")] * 6 + [None]) as replace_file,
+            patch("elo_model.storage.time.sleep") as backoff,
+            self.assertLogs("elo_model.storage", level="WARNING"),
+        ):
+            replace_checkpoint(Path("source"), Path("destination"))
+        self.assertEqual(replace_file.call_count, 7)
+        self.assertEqual([call.args[0] for call in backoff.call_args_list], [.1, .2, .4, .8, 1.6, 2])
 
         with (
             patch("elo_model.storage.os.replace", side_effect=PermissionError("permanent")),
@@ -272,6 +430,7 @@ class PipelineTests(unittest.TestCase):
             for cell in notebook["cells"]
             if cell["cell_type"] == "code"
         ]
+        cells.pop(1)
 
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -291,6 +450,9 @@ class PipelineTests(unittest.TestCase):
                     RatingQuota(lower=0, category="blitz", rows=1000),
                 )),
                 training=TrainingConfig(trials=0, max_trees=5, min_rows=2),
+                neural_training=NeuralTrainingConfig(
+                    hidden_sizes=(8,), max_epochs=2, min_rows=2, progress=False,
+                ),
             )
             archives = self.notebook_archives(settings.candidate_games)
             metadata = sample_engine_metadata()
@@ -328,10 +490,8 @@ class PipelineTests(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()),
                 patch("logging.basicConfig"),
             ):
-                setup = cells[0].replace(
-                    "settings = PipelineConfig.expanded()", "settings = test_settings"
-                )
-                self.run_notebook_stage(setup, namespace, root)
+                self.run_notebook_stage(cells[0], namespace, root)
+                namespace["settings"] = settings
                 self.run_notebook_stage(cells[1], namespace, root)
 
                 with patch.object(
@@ -350,8 +510,9 @@ class PipelineTests(unittest.TestCase):
                 self.run_notebook_stage(cells[3], namespace, root)
                 self.run_notebook_stage(cells[4], namespace, root)
                 namespace["settings"] = replace(settings, min_training_group_players=100)
+                namespace["allow_underfilled_bands"] = False
                 preflight = (
-                    "try:\n" + indent(cells[4], "    ")
+                    "try:\n" + indent(cells[4].replace("allow_underfilled_bands = True", ""), "    ")
                     + "\nexcept ValueError as error:\n    preflight_error = str(error)\n"
                 )
                 self.run_notebook_stage(preflight, namespace, root)
@@ -381,7 +542,9 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(
                 manifest["selection"]["config"], settings.stratification.model_dump(mode="json")
             )
-            self.assertEqual(manifest["candidate_games"], settings.candidate_games)
+            self.assertEqual(manifest["selection"]["candidate_games"], settings.candidate_games)
+            self.assertEqual(manifest["model_backend"], "pytorch")
+            self.assertTrue((settings.artifact_directory / "pooled.pt").exists())
             self.assertEqual(manifest["dataset_games"], len(namespace["split_games"]))
             self.assertEqual(
                 json.loads(usernames_path.read_text(encoding="utf-8")), ["Alice"]
@@ -449,6 +612,57 @@ class PipelineTests(unittest.TestCase):
             self.assertEqual(rows.iloc[0]["target_username"], "alice")
             self.assertEqual(rows.iloc[0]["rating"], 1200)
 
+    def test_notebook_neural_training_from_cached_features(self):
+        """Retrain and preview from saved features without collection or analysis state.
+
+        Args:
+            None.
+
+        Returns:
+            None; neural export succeeds without raw games or a split manifest.
+        """
+        notebook_path = Path(__file__).resolve().parent.parent / "build_training_data.ipynb"
+        notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
+        cells = ["".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            settings = PipelineConfig(
+                data_directory=root, analysis_directory=root, artifact_directory=root / "model",
+                neural_training=NeuralTrainingConfig(hidden_sizes=(8,), max_epochs=2, progress=False),
+            )
+            save_feature_dataset(synthetic_frame(), settings.features_path, sample_engine_metadata())
+            namespace = {}
+            with contextlib.redirect_stdout(io.StringIO()), patch("logging.basicConfig"):
+                self.run_notebook_stage(cells[0], namespace, root)
+                namespace["settings"] = settings
+                for source in cells[8:11]:
+                    self.run_notebook_stage(source, namespace, root)
+            self.assertNotIn("split_games", namespace)
+            self.assertNotIn("games_df", namespace)
+            self.assertEqual(namespace["predictor"].manifest["model_backend"], "pytorch")
+            self.assertEqual(len(namespace["prediction_preview"]), settings.preview_rows)
+
+    def test_cli_legacy_lightgbm_backend(self):
+        """Keep the explicit legacy training option functional after the default change.
+
+        Args:
+            None.
+
+        Returns:
+            None; the LightGBM option exports a tree bundle.
+        """
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            features, output = root / "features.parquet", root / "trees"
+            save_feature_dataset(synthetic_frame(), features, sample_engine_metadata())
+            self.run_cli(
+                "train", "--backend", "lightgbm", "--input", str(features),
+                "--output", str(output), "--trials", "0", "--max-trees", "5",
+            )
+            manifest = json.loads((output / "model_manifest.json").read_text())
+            self.assertEqual(manifest["model_backend"], "lightgbm")
+            self.assertEqual(manifest["models"], {"pooled": "pooled.txt"})
+
     def test_cli_train_export_predict(self):
         """Exercise the offline CLI with vector and PGN-analysis inference.
 
@@ -474,12 +688,21 @@ class PipelineTests(unittest.TestCase):
                 "0",
                 "--max-trees",
                 "5",
+                "--max-epochs",
+                "2",
+                "--hidden-sizes",
+                "16",
+                "8",
                 "--model-version",
                 "test-v1",
             )
             self.assertEqual(
                 json.loads((trained / "model_manifest.json").read_text())["model_version"],
                 "test-v1",
+            )
+            self.assertEqual(
+                json.loads((trained / "model_manifest.json").read_text())["model_backend"],
+                "pytorch",
             )
             self.run_cli(
                 "export",

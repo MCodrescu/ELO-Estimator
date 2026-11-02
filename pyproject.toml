@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "chess-rating-estimator"
 version = "0.2.0"
-description = "Reusable single-game chess rating estimation with native LightGBM models"
+description = "Reusable single-game chess rating estimation with PyTorch neural networks"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
@@ -15,6 +15,7 @@ dependencies = [
     "pandas>=2.2,<3",
     "pydantic>=2,<3",
     "tqdm>=4.67,<5",
+    "torch>=2.6,<3",
 ]
 
 [project.optional-dependencies]

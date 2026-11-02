@@ -5,7 +5,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, date, datetime
 from itertools import pairwise
 from pathlib import Path
-from typing import Literal, Self
+from typing import Annotated, Literal, Self
 
 import chess
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -377,12 +377,54 @@ class TrainingConfig:
             raise ValueError("Training limits must be positive")
 
 
+NEURAL_ARTIFACT_DIRECTORY = Path("artifacts/rating_model_neural")
+NEURAL_TRAINING_DIRECTORY = Path("runs/neural")
+
+
+class NeuralTrainingConfig(BaseModel):
+    """Reproducible small-network training and validation-only model selection."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    mode: Literal["pooled", "separate"] = "pooled"
+    hidden_sizes: tuple[Annotated[int, Field(gt=0, strict=True)], ...] = (128, 64)
+    dropout: float = Field(default=.1, ge=0, lt=1, allow_inf_nan=False)
+    learning_rate: float = Field(default=.001, gt=0, allow_inf_nan=False)
+    weight_decay: float = Field(default=.0001, ge=0, allow_inf_nan=False)
+    batch_size: int = Field(default=256, ge=1, strict=True)
+    max_epochs: int = Field(default=100, ge=1, strict=True)
+    patience: int = Field(default=10, ge=1, strict=True)
+    min_rows: int = Field(default=30, ge=1, strict=True)
+    threads: int = Field(default=1, ge=1, strict=True)
+    seed: int = DEFAULT_SEED
+    device: Literal["cpu", "cuda", "auto"] = "cpu"
+    balance_bands: bool = False
+    balance_players: bool = True
+    progress: bool = True
+
+    @model_validator(mode="after")
+    def validate_hidden_sizes(self) -> Self:
+        """Require positive integer widths for every hidden layer.
+
+        Args:
+            None.
+
+        Returns:
+            Validated settings; invalid layer widths raise ValueError.
+        """
+        if not self.hidden_sizes or any(size < 1 for size in self.hidden_sizes):
+            raise ValueError("hidden_sizes must contain positive layer widths")
+        return self
+
+
 @dataclass(frozen=True)
 class StorageConfig:
     """Bounded handling of transient Windows checkpoint replacement locks."""
 
-    replace_attempts: int = 5
-    retry_delay: float = .05
+    replace_attempts: int = 12
+    retry_delay: float = .1
+    retry_backoff: float = 2
+    max_retry_delay: float = 2
 
     def __post_init__(self) -> None:
         """Reject unbounded or invalid retry settings.
@@ -398,6 +440,10 @@ class StorageConfig:
 
         if not math.isfinite(self.retry_delay) or self.retry_delay < 0:
             raise ValueError("retry_delay must be finite and nonnegative")
+        if not math.isfinite(self.retry_backoff) or self.retry_backoff < 1:
+            raise ValueError("retry_backoff must be finite and at least one")
+        if not math.isfinite(self.max_retry_delay) or self.max_retry_delay < self.retry_delay:
+            raise ValueError("max_retry_delay must be finite and at least retry_delay")
 
 
 class InferenceConfig(BaseModel):
@@ -556,6 +602,7 @@ class PipelineConfig:
             progress=True,
         )
     )
+    neural_training: NeuralTrainingConfig = field(default_factory=NeuralTrainingConfig)
 
     @classmethod
     def expanded(cls) -> Self:

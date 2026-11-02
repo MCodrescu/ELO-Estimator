@@ -27,6 +27,7 @@ applyTo: '**'
 - Do not add comments that merely restate the next line of code. Comment only to explain what the code cannot show on its own.
 - Always include informative doc strings for every method including an args and returns sections with descriptions of each parameter.
 - Separate code by newlines to make it more readable. Jumbled code is difficult to read. Code is read more than it is written. Add comments to describe intention when not clear explicitly from the method names.
+- READABLE code is the most important thing!
 
 ## Imports (Python)
 - Follow PEP 8. Group imports as: standard library, third-party, local — separated by blank lines.

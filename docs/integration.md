@@ -17,6 +17,22 @@ Test MAE is 606.6 and RMSE 732.8. The speed/accuracy tradeoff was explicitly
 accepted; full-data retraining remains pending. The manifest and evaluation
 describe the actual weights, not a production accuracy guarantee.
 
+The notebook and CLI now train PyTorch MLPs by default. After neural training,
+deploy the complete `artifacts/rating_model_neural` directory instead. Its model
+file is `pooled.pt` (or one `.pt` checkpoint per time category), accompanied by
+the same four JSON files. Checkpoints include train-fitted imputation/scaling,
+target normalization, architecture and weights, and load on CPU with
+`torch.load(..., weights_only=True)`. PyTorch is a base package dependency.
+
+`RatingEstimator` and `RatingPredictor` use the manifest's `model_backend` to
+select PyTorch or LightGBM without application-side branching. Point
+`InferenceConfig.model_directory` at the neural directory to use the new model;
+the examples below still illustrate the shipped legacy directory. Neither
+training nor export overwrites a different backend in an existing directory.
+Neural models reuse the existing schema and analysis contract; no Stockfish
+rerun is required when training from compatible saved features. Neural accuracy
+must be measured after training and is not represented by the legacy metrics above.
+
 ## Analyze Once
 
 ```python

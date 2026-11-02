@@ -9,6 +9,7 @@ from elo_model.config import (
     DatasetConfig,
     EngineConfig,
     FeatureConfig,
+    NeuralTrainingConfig,
     PipelineConfig,
     StratificationConfig,
     TrainingConfig,
@@ -20,6 +21,22 @@ from training_data.config import DatasetConfig as CollectionDatasetConfig
 
 class ConfigTests(unittest.TestCase):
     """Check canonical definitions and independently editable workflow settings."""
+
+    def test_neural_training_settings_validate_without_changing_engine(self):
+        """Keep neural hyperparameters separate from the feature-engine contract.
+
+        Args:
+            None.
+
+        Returns:
+            None; neural defaults and invalid training settings are checked.
+        """
+        settings = PipelineConfig.expanded()
+        self.assertEqual(settings.neural_training.hidden_sizes, (128, 64))
+        self.assertEqual(settings.neural_training.device, "cpu")
+        for payload in ({"hidden_sizes": (0,)}, {"dropout": 1}, {"batch_size": 0}):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                NeuralTrainingConfig.model_validate(payload)
 
     def test_expanded_run_is_isolated_and_covers_requested_ratings(self):
         """Check the wide-run budget, boundaries and reusable engine contract.

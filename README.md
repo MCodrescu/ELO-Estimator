@@ -15,7 +15,7 @@ The allowance is not an end-to-end wall-clock guarantee. Analysis runs once and
 can be reused for the evaluation graph, move insights, accuracy summaries and
 rating predictions. Candidate-gap and top-three features are not used.
 
-The selected bundle is [artifacts/rating_model](artifacts/rating_model/model_manifest.json),
+The legacy LightGBM bundle is [artifacts/rating_model](artifacts/rating_model/model_manifest.json),
 version `rating-fast-v2`. It used 45 training, 30 validation and 23 test player
 rows. Test MAE is **606.6** and RMSE **732.8** rating points. The speed/accuracy
 tradeoff was explicitly accepted; full-data retraining remains pending. Older
@@ -32,7 +32,42 @@ Install Stockfish separately and set its executable in
 [build_training_data.ipynb](build_training_data.ipynb) from Cell 1 onward. It reuses
 saved raw games and collects more only when needed. The workflow splits by target
 player and game before analysis, applies training quotas, extracts fast features,
-tunes LightGBM on validation rows and reports held-out errors before export.
+trains a PyTorch multilayer perceptron (MLP) and reports held-out errors before
+export. Existing LightGBM bundles remain loadable; they are not converted weights.
+
+### Neural Training
+
+The network uses two hidden layers of 128 and 64 units with ReLU and 0.1 dropout.
+Medians, feature scaling and rating normalization are fitted on training rows
+only; each feature also has a missing-value indicator. AdamW optimizes weighted
+Huber loss, with early stopping on validation MAE and a train-median baseline.
+Test rows are evaluated only after the best epoch is restored.
+
+Construct a validated `NeuralTrainingConfig` and replace `settings.neural_training`
+to adjust architecture, batch size, learning rate, epochs and patience. CPU is
+the default; `device="auto"` selects CUDA when available. CUDA requires a
+compatible PyTorch installation.
+
+If `data/expanded/features.parquet` and its metadata sidecar already exist,
+restart the kernel and run **Cell 1, then Cells 9-11**. Collection, splitting,
+Stockfish and feature extraction do not need to run again. Otherwise run the
+notebook in order. The optional target override remains in Cell 2.
+
+The CLI also defaults to PyTorch and can train directly from those features:
+
+```text
+python -m elo_model train --input data/expanded/features.parquet --output artifacts/rating_model_neural --hidden-sizes 128 64 --max-epochs 100 --patience 10 --device cpu --progress
+```
+
+Both paths export `pooled.pt` (or category-specific `.pt` files), preprocessing,
+feature metadata, history and evaluation reports. Reload parity uses float32
+tolerances (`rtol=1e-6`, `atol=1e-4`). The CLI's staged defaults use `runs/neural`
+for training and `artifacts/rating_model_neural` for export/prediction.
+Use `--backend lightgbm` with a separate `--output` to train the legacy estimator;
+its `--trials` and `--max-trees` options do not control neural training.
+
+No neural accuracy result is implied by these changes. Train and compare held-out
+MAE/RMSE with the legacy model on the same split before choosing deployment weights.
 
 ### Expanded Training Run
 
@@ -50,7 +85,7 @@ configuration and released model unchanged and uses these targets:
     3,000 archive-owner expansions per class (3,000 accepted usernames).
     These are bounded targets, not guarantees.
 
-Restart the kernel, then run **Cells 1-5 first**. Cell 2 seeds separate blitz,
+Restart the kernel, then run **Cells 1-6 first**. Cell 3 seeds separate blitz,
 rapid and bullet searches using up to 200 shuffled existing usernames plus the
 configured seed. It preserves the original username file, saves the expanded
 pool under `data/expanded/usernames.json`, and checkpoints each completed
@@ -85,7 +120,7 @@ To improve coverage or add known active high/low-rated players, edit Cell 1:
 
 ```python
 settings = replace(
-        PipelineConfig.expanded(),
+        settings,
         discovery_seed_usernames=("additional_username",),
         target_games=30000,  # Collect up to 90,000 candidates rather than 60,000.
 )
@@ -97,17 +132,19 @@ not rerun completed searches. To skip discovery, set `discovery_enabled=False`;
 existing saved usernames remain available. Review shortfalls after each
 collection pass and expand the budget or seeds where needed.
 
-Cell 5 saves training and partition coverage before Stockfish. It stops for
+Cell 6 saves training and partition coverage before Stockfish. It checks for
 unfilled training quotas or fewer than 100 distinct training players in a
 rating/category group, and warns about holdout groups with fewer than 20 players.
 Rare upper bands may remain underfilled. After reviewing those reports, either
 collect more data or explicitly set `allow_underfilled_bands = True` and rerun
-Cell 5 to accept the recorded shortfalls. Then run Cells 6-10 for analysis,
-training, evaluation and export. Cell 11 is an optional live-game demonstration.
+Cell 6 to accept the recorded shortfalls. The current notebook explicitly accepts
+underfilled bands in that cell; remove that override to require approval.
+Then run Cells 7-11 for analysis, training, evaluation and export.
+Cell 12 is an optional live-game demonstration.
 
 Expanded raw games, splits, analysis references and features live under
-`data/expanded`; exports go to `artifacts/rating_model_expanded`. The original
-`artifacts/rating_model` bundle is not overwritten. The shared
+`data/expanded`; neural exports go to `artifacts/rating_model_neural`. The original
+LightGBM bundles are not overwritten. The shared
 `data/analysis_cache` is keyed by game history and the complete engine contract,
 so unchanged evaluations are reused. Existing collection months and source-player
 caps must remain fixed when resuming; if the calendar advances, restore the saved
@@ -129,7 +166,7 @@ from elo_model.config import InferenceConfig
 from elo_model.inference import RatingEstimator
 
 estimator = RatingEstimator(InferenceConfig(
-    model_directory="artifacts/rating_model",
+    model_directory="artifacts/rating_model_neural",
     engine_executable="/path/to/stockfish",
     cache_directory="data/analysis_cache",
 ))

@@ -5,12 +5,14 @@ from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
+from time import monotonic
 
 import numpy as np
 import pandas as pd
 from tqdm.auto import tqdm
 
 from .analysis import AnalysisCache, StockfishAnalyzer
+from .analysis_progress import AnalysisTiming
 from .config import (
     DEFAULT_ANALYSIS_WORKERS,
     EngineConfig,
@@ -75,6 +77,24 @@ def split_summary(games: pd.DataFrame) -> dict:
     }
 
 
+def _timed_analysis(analyzer: StockfishAnalyzer, game: GameInput, progress: bool) -> tuple[str, bool, float]:
+    """Measure fresh game analysis separately from cached results.
+
+    Args:
+        analyzer: Worker-local analyzer, never shared by concurrent game tasks.
+        game: Parsed game to analyze or load from cache.
+        progress: Whether to show per-position progress.
+
+    Returns:
+        Cache key, whether the result was cached, and fresh-only elapsed seconds.
+    """
+    previous_hits = analyzer.cache_hits
+    started = monotonic()
+    key, _ = analyzer.analyze(game, progress=progress)
+    cached = analyzer.cache_hits > previous_hits
+    return key, cached, 0.0 if cached else monotonic() - started
+
+
 def analyze_dataset(
     games: pd.DataFrame,
     config: EngineConfig,
@@ -91,7 +111,8 @@ def analyze_dataset(
         cache_directory: Local Parquet analysis store.
         output: Destination analyzed manifest; engine provenance is a sidecar.
         progress: Display game progress and cumulative cache-hit counts; show
-            position progress only when using one worker.
+            position progress only when using one worker. Rate and ETA use the
+            average fresh-analysis duration; cached games are excluded from timing.
         workers: Maximum simultaneous engines, each with config.threads threads.
 
     Returns:
@@ -115,6 +136,7 @@ def analyze_dataset(
         if Path(output).exists() and previous != metadata:
             raise ValueError("Use a separate analyzed manifest for each engine contract")
         write_json(Path(output).with_suffix(".engine.json"), metadata)
+        timing = AnalysisTiming(games, cache, metadata, len(analyzers))
         executor = stack.enter_context(ThreadPoolExecutor(max_workers=len(analyzers)))
         pending = {}
         for analyzer in analyzers:
@@ -122,7 +144,8 @@ def analyze_dataset(
             if item is not None:
                 index, record = item
                 future = executor.submit(
-                    analyzer.analyze,
+                    _timed_analysis,
+                    analyzer,
                     GameInput.from_pgn(record["pgn"]),
                     progress=progress and workers == 1,
                 )
@@ -132,27 +155,31 @@ def analyze_dataset(
             desc="Analyze games",
             unit="game",
             disable=not progress,
+            smoothing=0,
+            mininterval=1,
+            miniters=1,
+            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]",
         ) as bar:
             while pending:
                 completed, _ = wait(pending, return_when=FIRST_COMPLETED)
                 for future in completed:
                     index, record, analyzer = pending.pop(future)
-                    key, _ = future.result()
+                    key, cached, seconds = future.result()
                     records[index] = {**record, "analysis_key": key}
                     write_parquet(
                         output, pd.DataFrame([records[index] for index in sorted(records)])
                     )
-                    bar.update(1)
                     bar.set_postfix(
-                        cached=sum(worker.cache_hits for worker in analyzers),
-                        new=sum(worker.analyzed_games for worker in analyzers),
+                        timing.record(index, cached, seconds),
                         refresh=False,
                     )
+                    bar.update(1)
                     item = next(remaining, None)
                     if item is not None:
                         index, record = item
                         following = executor.submit(
-                            analyzer.analyze,
+                            _timed_analysis,
+                            analyzer,
                             GameInput.from_pgn(record["pgn"]),
                             progress=progress and workers == 1,
                         )
