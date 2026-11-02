@@ -26,9 +26,11 @@ EXPANDED_CATEGORY_ROWS = {"blitz": 1000, "rapid": 500, "bullet": 500}
 EXPANDED_REPORT_EDGES = (0, *EXPANDED_RATING_EDGES, math.inf)
 EXPANDED_REPORT_NAMES = (
     "<100",
-        *(f"{lower}-{EXPANDED_MAX_RATING if upper == EXPANDED_MAX_RATING + 1 else upper}"
-            for lower, upper in pairwise(EXPANDED_RATING_EDGES)),
-        f">{EXPANDED_MAX_RATING}",
+    *(
+        f"{lower}-{EXPANDED_MAX_RATING if upper == EXPANDED_MAX_RATING + 1 else upper}"
+        for lower, upper in pairwise(EXPANDED_RATING_EDGES)
+    ),
+    f">{EXPANDED_MAX_RATING}",
 )
 PIECE_VALUES = {
     chess.PAWN: 100,
@@ -152,7 +154,9 @@ class DatasetConfig:
             or not isinstance(self.search_stagnation_expansions, int)
             or self.search_stagnation_expansions < 1
         ):
-            raise ValueError("search_stagnation_expansions must be a positive integer or None")
+            raise ValueError(
+                "search_stagnation_expansions must be a positive integer or None"
+            )
 
         if (
             len(self.search_band_edges) < 2
@@ -179,7 +183,9 @@ class DatasetConfig:
             )
             or sum(self.search_band_quotas) != self.search_max_players
         ):
-            raise ValueError("search_band_quotas must match bands and sum to search_max_players")
+            raise ValueError(
+                "search_band_quotas must match bands and sum to search_max_players"
+            )
 
     def _validate_transport(self) -> None:
         """Check retry, logging and worker settings.
@@ -298,9 +304,11 @@ class EngineConfig:
         Returns:
             None; invalid settings raise ValueError.
         """
-        limits = (self.threads, self.hash_mb, *(
-            value for value in (self.depth, self.nodes) if value is not None
-        ))
+        limits = (
+            self.threads,
+            self.hash_mb,
+            *(value for value in (self.depth, self.nodes) if value is not None),
+        )
 
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value < 1
@@ -312,7 +320,8 @@ class EngineConfig:
             raise ValueError("The rating model requires MultiPV=1")
         if self.time_seconds is not None and (
             isinstance(self.time_seconds, bool)
-            or not math.isfinite(self.time_seconds) or self.time_seconds <= 0
+            or not math.isfinite(self.time_seconds)
+            or self.time_seconds <= 0
         ):
             raise ValueError("time_seconds must be finite and positive")
         if self.depth is None and self.nodes is None and self.time_seconds is None:
@@ -334,47 +343,23 @@ def validate_feature_engine(config: FeatureConfig, metadata: dict | None) -> Non
         None; fast schemas require complete matching search provenance.
     """
     settings = (metadata or {}).get("settings", {})
-    required = {"depth", "time_seconds", "nodes", "threads", "hash_mb",
-                "hash_reset", "played_move_scoring", "multipv"}
-    if not metadata or not required.issubset(settings) or metadata.get("analysis_version") != ANALYSIS_VERSION:
+    required = {
+        "depth",
+        "time_seconds",
+        "nodes",
+        "threads",
+        "hash_mb",
+        "hash_reset",
+        "played_move_scoring",
+        "multipv",
+    }
+    if (
+        not metadata
+        or not required.issubset(settings)
+        or metadata.get("analysis_version") != ANALYSIS_VERSION
+    ):
         raise ValueError("Fast features require complete version-2 engine provenance")
     EngineConfig(executable="provenance", **settings)
-
-
-@dataclass(frozen=True)
-class TrainingConfig:
-    """Bounded reproducible tuning and optional progress display."""
-
-    mode: str = "pooled"
-    trials: int = 20
-    seed: int = DEFAULT_SEED
-
-    max_trees: int = 500
-    early_stopping_rounds: int = 30
-    min_rows: int = 10
-    threads: int = 1
-
-    balance_bands: bool = False
-    balance_players: bool = False
-    progress: bool = False
-
-    def __post_init__(self) -> None:
-        """Check model modes and bounded experiment sizes.
-
-        Args:
-            None.
-
-        Returns:
-            None; invalid limits raise ValueError.
-        """
-        if self.mode not in ("pooled", "separate") or self.trials < 0:
-            raise ValueError("Use pooled/separate mode and nonnegative trials")
-
-        if (
-            min(self.max_trees, self.early_stopping_rounds, self.min_rows, self.threads)
-            < 1
-        ):
-            raise ValueError("Training limits must be positive")
 
 
 NEURAL_ARTIFACT_DIRECTORY = Path("artifacts/rating_model_neural")
@@ -388,9 +373,9 @@ class NeuralTrainingConfig(BaseModel):
 
     mode: Literal["pooled", "separate"] = "pooled"
     hidden_sizes: tuple[Annotated[int, Field(gt=0, strict=True)], ...] = (128, 64)
-    dropout: float = Field(default=.1, ge=0, lt=1, allow_inf_nan=False)
-    learning_rate: float = Field(default=.001, gt=0, allow_inf_nan=False)
-    weight_decay: float = Field(default=.0001, ge=0, allow_inf_nan=False)
+    dropout: float = Field(default=0.1, ge=0, lt=1, allow_inf_nan=False)
+    learning_rate: float = Field(default=0.001, gt=0, allow_inf_nan=False)
+    weight_decay: float = Field(default=0.0001, ge=0, allow_inf_nan=False)
     batch_size: int = Field(default=256, ge=1, strict=True)
     max_epochs: int = Field(default=100, ge=1, strict=True)
     patience: int = Field(default=10, ge=1, strict=True)
@@ -422,7 +407,7 @@ class StorageConfig:
     """Bounded handling of transient Windows checkpoint replacement locks."""
 
     replace_attempts: int = 12
-    retry_delay: float = .1
+    retry_delay: float = 0.1
     retry_backoff: float = 2
     max_retry_delay: float = 2
 
@@ -442,7 +427,10 @@ class StorageConfig:
             raise ValueError("retry_delay must be finite and nonnegative")
         if not math.isfinite(self.retry_backoff) or self.retry_backoff < 1:
             raise ValueError("retry_backoff must be finite and at least one")
-        if not math.isfinite(self.max_retry_delay) or self.max_retry_delay < self.retry_delay:
+        if (
+            not math.isfinite(self.max_retry_delay)
+            or self.max_retry_delay < self.retry_delay
+        ):
             raise ValueError("max_retry_delay must be finite and at least retry_delay")
 
 
@@ -572,8 +560,8 @@ class PipelineConfig:
     data_directory: Path = Path("data/notebook")
     analysis_directory: Path = Path("data/notebook_fast_v2")
     engine_cache_directory: Path = Path("data/analysis_cache")
-    artifact_directory: Path = Path("artifacts/rating_model")
-    training_directory: Path = Path("runs/fast_v2")
+    artifact_directory: Path = NEURAL_ARTIFACT_DIRECTORY
+    training_directory: Path = NEURAL_TRAINING_DIRECTORY
 
     split_fractions: tuple[float, float, float] = DEFAULT_SPLIT_FRACTIONS
     min_players_per_partition: int = 5
@@ -595,13 +583,6 @@ class PipelineConfig:
         )
     )
     features: FeatureConfig = field(default_factory=FeatureConfig)
-    training: TrainingConfig = field(
-        default_factory=lambda: TrainingConfig(
-            min_rows=30,
-            balance_bands=True,
-            progress=True,
-        )
-    )
     neural_training: NeuralTrainingConfig = field(default_factory=NeuralTrainingConfig)
 
     @classmethod
@@ -625,8 +606,8 @@ class PipelineConfig:
             usernames_path=Path("data/expanded/usernames.json"),
             data_directory=Path("data/expanded"),
             analysis_directory=Path("data/expanded"),
-            artifact_directory=Path("artifacts/rating_model_expanded"),
-            training_directory=Path("runs/expanded"),
+            artifact_directory=NEURAL_ARTIFACT_DIRECTORY,
+            training_directory=NEURAL_TRAINING_DIRECTORY,
             discovery_enabled=True,
             discovery_seed_usernames=("Hikaru", "GothamChess"),
             discovery_month_limit=1,
@@ -637,9 +618,15 @@ class PipelineConfig:
                 max_games_per_player=10,
                 search_band_edges=(0, *EXPANDED_RATING_EDGES),
                 search_band_quotas=(
-                    0, *(EXPANDED_DISCOVERY_PLAYERS_PER_BAND for _ in pairwise(EXPANDED_RATING_EDGES)), 0,
+                    0,
+                    *(
+                        EXPANDED_DISCOVERY_PLAYERS_PER_BAND
+                        for _ in pairwise(EXPANDED_RATING_EDGES)
+                    ),
+                    0,
                 ),
-                search_max_players=EXPANDED_DISCOVERY_PLAYERS_PER_BAND * (len(EXPANDED_RATING_EDGES) - 1),
+                search_max_players=EXPANDED_DISCOVERY_PLAYERS_PER_BAND
+                * (len(EXPANDED_RATING_EDGES) - 1),
                 search_max_expansions=3000,
                 search_stagnation_expansions=500,
                 archive_cache_directory=Path("data/archive_cache"),
@@ -651,9 +638,6 @@ class PipelineConfig:
                     for lower, upper in pairwise(EXPANDED_RATING_EDGES)
                     for category, rows in EXPANDED_CATEGORY_ROWS.items()
                 ),
-            ),
-            training=TrainingConfig(
-                min_rows=30, balance_bands=False, balance_players=True, progress=True,
             ),
         )
 
@@ -685,7 +669,10 @@ class PipelineConfig:
             raise ValueError("min_players_per_partition must be at least two")
         if any(
             isinstance(value, bool) or not isinstance(value, int) or value < 0
-            for value in (self.min_training_group_players, self.min_holdout_group_players)
+            for value in (
+                self.min_training_group_players,
+                self.min_holdout_group_players,
+            )
         ):
             raise ValueError("Group player minimums must be nonnegative integers")
         if (
@@ -694,7 +681,10 @@ class PipelineConfig:
             or self.discovery_seed_limit < 1
         ):
             raise ValueError("discovery_seed_limit must be a positive integer")
-        if any(not isinstance(name, str) or not name.strip() for name in self.discovery_seed_usernames):
+        if any(
+            not isinstance(name, str) or not name.strip()
+            for name in self.discovery_seed_usernames
+        ):
             raise ValueError("discovery_seed_usernames must contain nonempty strings")
         if self.discovery_month_limit is not None and (
             isinstance(self.discovery_month_limit, bool)
@@ -713,7 +703,9 @@ class PipelineConfig:
         Returns:
             Newest configured months up to the optional discovery limit.
         """
-        return tuple(sorted(self.collection.months, reverse=True)[:self.discovery_month_limit])
+        return tuple(
+            sorted(self.collection.months, reverse=True)[: self.discovery_month_limit]
+        )
 
     @property
     def candidate_games(self) -> int:
@@ -726,7 +718,9 @@ class PipelineConfig:
             Candidate-game collection target, independent of engine cache settings.
         """
         multiplier = (
-            self.stratification.candidate_multiplier if self.stratification.quotas else 1
+            self.stratification.candidate_multiplier
+            if self.stratification.quotas
+            else 1
         )
         return self.target_games * multiplier
 
@@ -795,5 +789,4 @@ CLI_CONFIG = PipelineConfig(
     data_directory=Path("data"),
     analysis_directory=Path("data/fast_v2"),
     collection=DatasetConfig(),
-    training=TrainingConfig(),
 )

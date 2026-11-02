@@ -78,15 +78,20 @@ def blunder_runs(flags: list[bool]) -> tuple[int, int]:
     Returns:
         Longest run length and count of maximal runs of length at least two.
     """
-    longest, clusters, current = 0, 0, 0
+    longest_run = 0
+    cluster_count = 0
+    current_run = 0
+
+    # A final false flag closes a run that reaches the last move.
     for flag in [*flags, False]:
         if flag:
-            current += 1
-            longest = max(longest, current)
+            current_run += 1
+            longest_run = max(longest_run, current_run)
         else:
-            clusters += current >= 2
-            current = 0
-    return longest, clusters
+            cluster_count += current_run >= 2
+            current_run = 0
+
+    return longest_run, cluster_count
 
 
 def validate_analysis(
@@ -103,9 +108,11 @@ def validate_analysis(
     """
     if len(analysis) != len(boards):
         raise ValueError("Supply analysis for initial and every reached position")
+
     for board, position in zip(boards, analysis):
         if board.fen() != position.fen:
             raise ValueError("Analysis FEN does not align with replay")
+
         moves = [candidate.move for candidate in position.candidates]
         if len(set(moves)) != len(moves) or len(moves) > 3:
             raise ValueError("Expected up to three distinct ranked moves")
@@ -140,9 +147,11 @@ def clock_measurement(
     think = start + increment - clock if clock is not None else math.nan
     if math.isfinite(think):
         think = max(0, think) if think >= -config.clock_jitter else math.nan
+
     trouble = math.nan
     if math.isfinite(start) and math.isfinite(base):
         trouble = float(start < base * config.trouble_fraction)
+
     return {
         "think": think,
         "clock_start": start,
@@ -166,11 +175,13 @@ def clock_features(records: list[dict], config: FeatureConfig) -> dict:
     times = [record["think"] for record in timed]
     budget = 0
     continuous = False
+
     for record in records:
         usable = math.isfinite(record["think"])
         if usable:
             budget += record["increment"] if continuous else record["budget"]
         continuous = usable
+
     result = {
         "think_mean": mean(times),
         "think_median": float(np.median(times)) if times else math.nan,
@@ -295,6 +306,7 @@ class GameFeatureExtractor:
             for color in chess.COLORS
         }
         records = []
+
         for index, move in enumerate(game.moves):
             board = boards[index]
             clock = game.clocks[index]
@@ -302,6 +314,7 @@ class GameFeatureExtractor:
             reached_score = following.evaluation
             if reached_score is None and following.candidates:
                 reached_score = following.candidates[0].score
+
             record = self._move(board, move, analysis[index], reached_score)
             record.update(
                 clock_measurement(
@@ -310,10 +323,14 @@ class GameFeatureExtractor:
             )
             previous[board.turn] = clock if clock is not None else math.nan
             records.append(record)
+
         return records
 
     def _move(
-        self, board: chess.Board, move: str, position: PositionAnalysis,
+        self,
+        board: chess.Board,
+        move: str,
+        position: PositionAnalysis,
         reached_score=None,
     ) -> dict:
         """Measure mover-relative accuracy using the next reached evaluation.
@@ -330,27 +347,39 @@ class GameFeatureExtractor:
         config = self.config
         if not position.candidates:
             raise ValueError("A played position needs ranked engine candidates")
-        best = position.candidates[0].score
         if len(position.candidates) != 1:
-            raise ValueError("Single-PV schema requires one candidate per played position")
-        played = reached_score
-        if played is None:
-            raise ValueError("Next-position scoring requires a reached-position evaluation")
-        sign = 1 if board.turn else -1
-        best_probability = best.probability(config.probability_scale)
-        played_probability = played.probability(config.probability_scale)
-        before = best_probability if board.turn else 1 - best_probability
-        after = played_probability if board.turn else 1 - played_probability
+            raise ValueError(
+                "Single-PV schema requires one candidate per played position"
+            )
+        if reached_score is None:
+            raise ValueError(
+                "Next-position scoring requires a reached-position evaluation"
+            )
+
+        best_score = position.candidates[0].score
+        best_probability = best_score.probability(config.probability_scale)
+        reached_probability = reached_score.probability(config.probability_scale)
+
+        # Engine scores are White-relative; loss is measured for the mover.
+        probability_before = best_probability if board.turn else 1 - best_probability
+        probability_after = (
+            reached_probability if board.turn else 1 - reached_probability
+        )
+        perspective_sign = 1 if board.turn else -1
+
         return {
             "color": board.turn,
             "phase": phase_name(board, config),
-            "before": before,
-            "after": after,
-            "loss": max(0, before - after),
+            "before": probability_before,
+            "after": probability_after,
+            "loss": max(0, probability_before - probability_after),
             "cp_loss": max(
                 0,
-                sign
-                * (best.centipawns(config.mate_cp) - played.centipawns(config.mate_cp)),
+                perspective_sign
+                * (
+                    best_score.centipawns(config.mate_cp)
+                    - reached_score.centipawns(config.mate_cp)
+                ),
             ),
             "top1": move == position.candidates[0].move,
         }
@@ -370,6 +399,7 @@ class GameFeatureExtractor:
         result = dict.fromkeys(names, math.nan)
         if not records:
             return result
+
         losses = np.array([record["loss"] for record in records])
         result.update(
             loss_mean=float(losses.mean()),
@@ -384,6 +414,7 @@ class GameFeatureExtractor:
             blunder_rate=mean(losses >= config.blunder),
             top1_rate=mean(record["top1"] for record in records),
         )
+
         for phase in ("opening", "middlegame", "endgame"):
             subset = [record for record in records if record["phase"] == phase]
             result[f"{phase}_loss_mean"] = mean(record["loss"] for record in subset)
@@ -391,6 +422,7 @@ class GameFeatureExtractor:
                 record["loss"] >= config.blunder for record in subset
             )
             result[f"{phase}_top1_rate"] = mean(record["top1"] for record in subset)
+
         winning = [
             record
             for record in records
@@ -406,12 +438,14 @@ class GameFeatureExtractor:
             for record in records
             if config.losing_probability < record["before"] < config.winning_probability
         ]
+
         for name, subset in (
             ("winning", winning),
             ("equal", equal),
             ("losing", losing),
         ):
             result[f"{name}_loss_mean"] = mean(record["loss"] for record in subset)
+
         result["winning_retention"] = mean(
             record["after"] >= config.winning_probability for record in winning
         )
@@ -438,19 +472,24 @@ class GameFeatureExtractor:
         records = self.measurements(game, analysis)
         boards = game.boards()
         sides = {}
+
         for color in chess.COLORS:
             sides[color] = self._side(
                 [record for record in records if record["color"] == color],
                 flag_value(game, color),
             )
+
         rows = []
         for color in (chess.WHITE, chess.BLACK):
             values = dict.fromkeys(self.schema.names, math.nan)
             values.update(context_features(game, color))
+
             for prefix, side in (("self", color), ("opponent", not color)):
                 values.update(
                     {f"{prefix}_{name}": value for name, value in sides[side].items()}
                 )
+
             values.update(material_features(boards, color))
             rows.append([values[name] for name in self.schema.names])
+
         return np.asarray(rows, dtype=np.float64)

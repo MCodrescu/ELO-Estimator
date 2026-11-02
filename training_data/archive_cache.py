@@ -64,17 +64,23 @@ class MonthlyArchiveCache:
         owner = username.strip().casefold()
         identity = hashlib.sha256(owner.encode("utf-8")).hexdigest()
         path = self.directory / identity / f"{year:04d}-{month:02d}.json"
+
         with self._guard:
             lock = self._locks.setdefault(path, Lock())
+
         with lock:
             now = datetime.now(UTC)
             cached = self._load(path, owner, year, month, now)
             if cached is not None:
                 logger.debug("Reusing raw archive %s/%04d/%02d", owner, year, month)
                 return cached
+
             snapshot = ArchiveSnapshot(
-                username=owner, year=year, month=month,
-                fetched_at=now.timestamp(), games=fetch(),
+                username=owner,
+                year=year,
+                month=month,
+                fetched_at=now.timestamp(),
+                games=fetch(),
             )
             write_json(path, snapshot.model_dump(mode="json"))
             return snapshot.games
@@ -96,15 +102,25 @@ class MonthlyArchiveCache:
         """
         if not path.exists():
             return None
+
         try:
-            snapshot = ArchiveSnapshot.model_validate_json(path.read_text(encoding="utf-8"))
+            snapshot = ArchiveSnapshot.model_validate_json(
+                path.read_text(encoding="utf-8")
+            )
         except ValidationError as error:
-            logger.warning("Invalid archive cache %s; downloading again: %s", path, error)
+            logger.warning(
+                "Invalid archive cache %s; downloading again: %s", path, error
+            )
             return None
+
         if (snapshot.username, snapshot.year, snapshot.month) != (owner, year, month):
-            logger.warning("Archive cache identity mismatch at %s; downloading again", path)
+            logger.warning(
+                "Archive cache identity mismatch at %s; downloading again", path
+            )
             return None
+
         age = now.timestamp() - snapshot.fetched_at
         if (year, month) >= (now.year, now.month) and not 0 <= age < self.ttl_seconds:
             return None
+
         return snapshot.games

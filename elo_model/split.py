@@ -90,26 +90,31 @@ class PlayerSplitter:
             raise ValueError(
                 "Duplicate game identities must be removed before splitting"
             )
+
         result = games.copy()
-        white = result["white_username"].map(self.player_partition)
-        black = result["black_username"].map(self.player_partition)
-        selected = np.where(
+        white_partitions = result["white_username"].map(self.player_partition)
+        black_partitions = result["black_username"].map(self.player_partition)
+        selected_partitions = np.where(
             result["game_id"].map(lambda value: hash_fraction(str(value), self.seed))
             < 0.5,
-            white,
-            black,
+            white_partitions,
+            black_partitions,
         )
-        result["partition"] = selected
-        result["white_partition"] = white
-        result["black_partition"] = black
-        result["keep_white"] = white == selected
-        result["keep_black"] = black == selected
+
+        result["partition"] = selected_partitions
+        result["white_partition"] = white_partitions
+        result["black_partition"] = black_partitions
+        result["keep_white"] = white_partitions == selected_partitions
+        result["keep_black"] = black_partitions == selected_partitions
+
         if self.strict_participants:
-            result = result[white == black].copy()
+            result = result[white_partitions == black_partitions].copy()
+
         if require_all and set(result["partition"]) != set(PARTITIONS):
             raise ValueError(
                 "Insufficient player coverage: collect more games or adjust split fractions"
             )
+
         return result.reset_index(drop=True)
 
 
@@ -124,10 +129,12 @@ def assert_disjoint(frame: pd.DataFrame) -> None:
     """
     if not set(frame["partition"]).issubset(PARTITIONS):
         raise ValueError("Unknown partition")
+
     for column in ("game_id", "target_username"):
         values = frame[column]
         if column == "target_username":
             values = values.map(normalize_player)
+
         assignments = pd.DataFrame({"value": values, "partition": frame["partition"]})
         if (assignments.groupby("value")["partition"].nunique() > 1).any():
             raise ValueError(f"Cross-partition leakage in {column}")

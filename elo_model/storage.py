@@ -103,5 +103,6 @@ def write_parquet(path: str | Path, frame: pd.DataFrame) -> None:
         else:
             logger.error(
                 "Checkpoint replacement failed for %s. Completed recovery file retained at %s",
-                path, temporary,
+                path,
+                temporary,
             )

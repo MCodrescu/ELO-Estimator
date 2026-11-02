@@ -7,8 +7,6 @@ from pydantic import BaseModel, ConfigDict
 
 from .config import FEATURE_SCHEMA_VERSION
 
-SCHEMA_VERSION = FEATURE_SCHEMA_VERSION
-
 ACCURACY = (
     "loss_mean",
     "loss_median",
@@ -48,7 +46,6 @@ SIDE_GROUPS = {
     "accuracy": ACCURACY,
     "phase": PHASE,
     "position": POSITION,
-    "complexity": (),
     "patterns": PATTERNS,
     "clock": CLOCK,
 }
@@ -92,7 +89,7 @@ class FeatureSchema(BaseModel):
     fingerprint: str
 
 
-def feature_schema(version: int = 2) -> FeatureSchema:
+def feature_schema(version: int = FEATURE_SCHEMA_VERSION) -> FeatureSchema:
     """Resolve a supported schema without padding unavailable observations.
 
     Args:
@@ -101,9 +98,12 @@ def feature_schema(version: int = 2) -> FeatureSchema:
     Returns:
         Versioned groups, ordered names and their SHA-256 fingerprint.
     """
-    if version != 2:
+    if version != FEATURE_SCHEMA_VERSION:
         raise ValueError("Unsupported feature schema")
+
     return FeatureSchema(
-        version=version, groups=FEATURE_GROUPS, names=FEATURE_NAMES,
+        version=version,
+        groups=FEATURE_GROUPS,
+        names=FEATURE_NAMES,
         fingerprint=FEATURE_HASH,
     )

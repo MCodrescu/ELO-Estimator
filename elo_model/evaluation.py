@@ -6,7 +6,6 @@ import pandas as pd
 from .config import EXPANDED_REPORT_EDGES, EXPANDED_REPORT_NAMES, TIME_CATEGORIES
 from .config import RATING_BAND_EDGES as BAND_EDGES
 from .config import RATING_BAND_NAMES as BAND_NAMES
-from .feature_schema import FEATURE_GROUPS
 
 
 def rating_bands(ratings, expanded: bool = False) -> pd.Categorical:
@@ -46,6 +45,7 @@ def error_summary(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
             "player_macro_mae": None,
             "signed_bias": None,
         }
+
     error = predictions - frame["rating"].to_numpy(dtype=float)
     player_errors = (
         pd.DataFrame(
@@ -54,6 +54,7 @@ def error_summary(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
         .groupby("player")["error"]
         .mean()
     )
+
     return {
         "rows": len(frame),
         "players": len(player_errors),
@@ -77,9 +78,11 @@ def evaluate(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
     predictions = np.asarray(predictions, dtype=float)
     if predictions.shape != (len(frame),) or not np.isfinite(predictions).all():
         raise ValueError("Predictions must be one finite value per row")
+
     bands = rating_bands(frame["rating"])
     expanded_bands = rating_bands(frame["rating"], expanded=True)
     categories = sorted(set(TIME_CATEGORIES) | set(frame["category"].unique()))
+
     return {
         "overall": error_summary(frame, predictions),
         "by_rating_band": {
@@ -102,8 +105,12 @@ def evaluate(frame: pd.DataFrame, predictions: np.ndarray) -> dict:
         "by_rating_band_category": {
             name: {
                 category: error_summary(
-                    frame.loc[(expanded_bands == name) & (frame["category"] == category)],
-                    predictions[(expanded_bands == name) & (frame["category"] == category)],
+                    frame.loc[
+                        (expanded_bands == name) & (frame["category"] == category)
+                    ],
+                    predictions[
+                        (expanded_bands == name) & (frame["category"] == category)
+                    ],
                 )
                 for category in categories
             }
@@ -126,43 +133,21 @@ def sample_weights(
         Finite row weights normalized to mean one.
     """
     weights = np.ones(len(train))
+
     if balance_bands:
         bands = pd.Series(rating_bands(train["rating"]), index=train.index)
         counts = bands.value_counts()
         weights *= np.asarray(
             bands.map(lambda band: len(train) / max(1, counts[band])), dtype=float
         )
+
     if balance_players:
         counts = train["target_username"].value_counts()
         weights *= (
             train["target_username"].map(lambda player: 1 / counts[player]).to_numpy()
         )
+
     weights /= weights.mean()
     weights = np.clip(weights, 0.2, 5)
+
     return weights / weights.mean()
-
-
-def grouped_importance(booster, groups: dict | None = None) -> dict:
-    """Sum tree gain and split counts by the versioned feature groups.
-
-    Args:
-        booster: Trained native LightGBM booster with saved feature names.
-        groups: Feature groups for the selected schema; legacy groups by default.
-
-    Returns:
-        Per-group gain, gain fraction and split counts.
-    """
-    names = booster.feature_name()
-    gains = dict(zip(names, booster.feature_importance(importance_type="gain")))
-    splits = dict(zip(names, booster.feature_importance(importance_type="split")))
-    total = sum(gains.values())
-    return {
-        group: {
-            "gain": float(sum(gains[name] for name in features)),
-            "gain_fraction": float(sum(gains[name] for name in features) / total)
-            if total
-            else 0.0,
-            "splits": int(sum(splits[name] for name in features)),
-        }
-        for group, features in (groups if groups is not None else FEATURE_GROUPS).items()
-    }

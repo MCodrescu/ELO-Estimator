@@ -18,7 +18,9 @@ except ImportError:
 class DiscoveryProgress:
     """Keep live per-band shortages and a conservative quota-time estimate."""
 
-    def __init__(self, category: str, quotas: dict[str, int], archives: int, enabled: bool):
+    def __init__(
+        self, category: str, quotas: dict[str, int], archives: int, enabled: bool
+    ):
         """Prepare notebook-friendly displays without starting any search.
 
         Args:
@@ -45,25 +47,43 @@ class DiscoveryProgress:
         self.stack = ExitStack()
         self.started = monotonic()
         self.last_gain = self.started
-        self.summary = self.stack.enter_context(tqdm(
-            total=sum(self.quotas.values()), desc=f"{category}: quotas filled",
-            unit="player", disable=not enabled or self.notebook, position=0,
-            leave=True, mininterval=1,
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]",
-        ))
-        self.archives = self.stack.enter_context(tqdm(
-            total=archives, desc=f"{category}: archive budget",
-            unit="archive", disable=not enabled or self.notebook, position=1,
-            leave=True, mininterval=1,
-            bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}, budget ETA {remaining}{postfix}]",
-        ))
+        self.summary = self.stack.enter_context(
+            tqdm(
+                total=sum(self.quotas.values()),
+                desc=f"{category}: quotas filled",
+                unit="player",
+                disable=not enabled or self.notebook,
+                position=0,
+                leave=True,
+                mininterval=1,
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]",
+            )
+        )
+        self.archives = self.stack.enter_context(
+            tqdm(
+                total=archives,
+                desc=f"{category}: archive budget",
+                unit="archive",
+                disable=not enabled or self.notebook,
+                position=1,
+                leave=True,
+                mininterval=1,
+                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}, budget ETA {remaining}{postfix}]",
+            )
+        )
         self.bands = {
-            band: self.stack.enter_context(tqdm(
-                total=quota, desc=f"{category}: {band}", unit="player",
-                disable=not enabled or self.notebook, position=index + 2,
-                leave=True, mininterval=1,
-                bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{postfix}]",
-            ))
+            band: self.stack.enter_context(
+                tqdm(
+                    total=quota,
+                    desc=f"{category}: {band}",
+                    unit="player",
+                    disable=not enabled or self.notebook,
+                    position=index + 2,
+                    leave=True,
+                    mininterval=1,
+                    bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{postfix}]",
+                )
+            )
             for index, (band, quota) in enumerate(self.quotas.items())
         }
         self._refresh(self.counts)
@@ -106,14 +126,17 @@ class DiscoveryProgress:
         """
         if not self.enabled:
             return
+
         now = monotonic()
         if not force and now - self.last_render < 1:
             return
+
         self.last_render = now
         if not self.notebook:
             for bar in (self.summary, self.archives, *self.bands.values()):
                 bar.refresh()
             return
+
         total = sum(self.quotas.values())
         retained = sum(self.counts.values())
         status = escape(
@@ -155,10 +178,12 @@ class DiscoveryProgress:
         pending = [band for band in self.quotas if counts[band] < self.quotas[band]]
         if not pending:
             return "00:00"
+
         if any(counts[band] == 0 for band in pending):
             return "unknown (unseen bands)"
         if now - self.last_gain >= 60:
             return "unknown (quota gains stalled)"
+
         elapsed = now - self.started
         remaining = max(
             (self.quotas[band] - counts[band]) * elapsed / counts[band]
@@ -177,10 +202,14 @@ class DiscoveryProgress:
             None; all visible quota counts and shortages are updated.
         """
         now = monotonic()
-        capped = {band: min(max(counts.get(band, 0), 0), quota) for band, quota in self.quotas.items()}
+        capped = {
+            band: min(max(counts.get(band, 0), 0), quota)
+            for band, quota in self.quotas.items()
+        }
         retained = sum(capped.values())
         if retained > sum(self.counts.values()):
             self.last_gain = now
+
         filled = sum(capped[band] == quota for band, quota in self.quotas.items())
         self.summary.update(retained - sum(self.counts.values()))
         status = {
@@ -189,13 +218,18 @@ class DiscoveryProgress:
             "quota_ETA": self._eta(capped, now),
         }
         if reason is not None:
-            status["quota_ETA"] = "00:00" if retained == sum(self.quotas.values()) else "not reached"
+            status["quota_ETA"] = (
+                "00:00" if retained == sum(self.quotas.values()) else "not reached"
+            )
             status["stopped"] = reason
+
         self.status = status
         self.summary.set_postfix(status, refresh=False)
+
         for band, bar in self.bands.items():
             bar.update(capped[band] - self.counts[band])
             bar.set_postfix(remaining=self.quotas[band] - capped[band], refresh=False)
+
         self.counts = capped
         self._render(force=reason is not None)
 

@@ -20,9 +20,9 @@ from elo_model.config import DatasetConfig
 from .archive_cache import MonthlyArchiveCache
 
 logger = logging.getLogger(__name__)
-P = ParamSpec("P")
-T = TypeVar("T")
-R = TypeVar("R")
+EndpointParameters = ParamSpec("EndpointParameters")
+ItemType = TypeVar("ItemType")
+ResultType = TypeVar("ResultType")
 
 
 class ChessComConnection:
@@ -39,8 +39,11 @@ class ChessComConnection:
         """
         self.config = config
         self.archive_cache = (
-            MonthlyArchiveCache(config.archive_cache_directory, config.archive_cache_ttl_seconds)
-            if config.archive_cache_directory is not None else None
+            MonthlyArchiveCache(
+                config.archive_cache_directory, config.archive_cache_ttl_seconds
+            )
+            if config.archive_cache_directory is not None
+            else None
         )
 
         self.client = ChessDotComClient(
@@ -100,8 +103,12 @@ class ChessComConnection:
         return True
 
     def _request(
-        self, resource: str, endpoint: Callable[P, T], *args: P.args, **kwargs: P.kwargs
-    ) -> T:
+        self,
+        resource: str,
+        endpoint: Callable[EndpointParameters, ResultType],
+        *args: EndpointParameters.args,
+        **kwargs: EndpointParameters.kwargs,
+    ) -> ResultType:
         """Call one endpoint with shared retry policy and resource-aware logging.
 
         Args:
@@ -120,7 +127,7 @@ class ChessComConnection:
             backoff=self.config.retry_backoff,
             callback=self._should_retry,
         )
-        def request(resource: str) -> T:
+        def request(resource: str) -> ResultType:
             """Execute a single attempt without suppressing failures.
 
             Args:
@@ -139,8 +146,8 @@ class ChessComConnection:
         return request(resource)
 
     def _parallel_map(
-        self, function: Callable[[T], R], items: Iterable[T]
-    ) -> Iterator[R]:
+        self, function: Callable[[ItemType], ResultType], items: Iterable[ItemType]
+    ) -> Iterator[ResultType]:
         """Bound in-flight requests while yielding results in input order.
 
         Args:
@@ -215,6 +222,7 @@ class ChessComConnection:
         if self.archive_cache is not None:
             username, games = self._get_raw_monthly_games(job)
             return username, ResponseBuilder().build(json.dumps({"games": games})).games
+
         username, year, month = job
         response = self._request(
             f"player/{username}/games/{year}/{month:02d}",
@@ -258,9 +266,13 @@ class ChessComConnection:
         """
         if self.archive_cache is None:
             return self._download_raw_monthly_games(job)
+
         username, year, month = job
         games = self.archive_cache.get(
-            username, year, month, lambda: self._download_raw_monthly_games(job)[1],
+            username,
+            year,
+            month,
+            lambda: self._download_raw_monthly_games(job)[1],
         )
         return username, games
 

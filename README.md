@@ -15,16 +15,28 @@ The allowance is not an end-to-end wall-clock guarantee. Analysis runs once and
 can be reused for the evaluation graph, move insights, accuracy summaries and
 rating predictions. Candidate-gap and top-three features are not used.
 
-The legacy LightGBM bundle is [artifacts/rating_model](artifacts/rating_model/model_manifest.json),
-version `rating-fast-v2`. It used 45 training, 30 validation and 23 test player
-rows. Test MAE is **606.6** and RMSE **732.8** rating points. The speed/accuracy
-tradeoff was explicitly accepted; full-data retraining remains pending. Older
-analysis contracts and bundles are no longer supported.
+Train a neural bundle before prediction. Model weights are not included in the
+repository. Only PyTorch checkpoints with the current analysis contract are supported.
+
+## Use in Another Repository
+
+Use Python 3.11+ and install a pinned commit or a wheel built from it. The pip
+distribution is `chess-rating-estimator`; imports use `elo_model`.
+
+```text
+python -m pip install "chess-rating-estimator[engine] @ git+https://github.com/MCodrescu/ELO-Estimator.git@COMMIT_SHA"
+```
+
+Replace `COMMIT_SHA` with your selected full commit. Deploy a separately trained
+PyTorch bundle and a compatible Stockfish executable. For supplied-analysis
+prediction, omit `[engine]`; no Stockfish installation is needed. See the
+[integration guide](docs/integration.md) for deployment files, dependency choices,
+API examples, response fields, and engine compatibility requirements.
 
 ## Train
 
 ```text
-python -m pip install ".[train]"
+python -m pip install ".[train]" ipykernel ipython
 ```
 
 Install Stockfish separately and set its executable in
@@ -33,7 +45,7 @@ Install Stockfish separately and set its executable in
 saved raw games and collects more only when needed. The workflow splits by target
 player and game before analysis, applies training quotas, extracts fast features,
 trains a PyTorch multilayer perceptron (MLP) and reports held-out errors before
-export. Existing LightGBM bundles remain loadable; they are not converted weights.
+export.
 
 ### Neural Training
 
@@ -51,9 +63,12 @@ compatible PyTorch installation.
 If `data/expanded/features.parquet` and its metadata sidecar already exist,
 restart the kernel and run **Cell 1, then Cells 9-11**. Collection, splitting,
 Stockfish and feature extraction do not need to run again. Otherwise run the
-notebook in order. The optional target override remains in Cell 2.
+notebook in order. Cell 2 currently overrides `target_games=2000`, reducing the
+candidate budget to 6,000 games without reducing the 20,000-row training quotas.
+Skip or edit that cell to use the expanded configuration's 60,000-game budget;
+the smaller override is likely to leave quotas underfilled.
 
-The CLI also defaults to PyTorch and can train directly from those features:
+The CLI can also train directly from those features:
 
 ```text
 python -m elo_model train --input data/expanded/features.parquet --output artifacts/rating_model_neural --hidden-sizes 128 64 --max-epochs 100 --patience 10 --device cpu --progress
@@ -63,16 +78,12 @@ Both paths export `pooled.pt` (or category-specific `.pt` files), preprocessing,
 feature metadata, history and evaluation reports. Reload parity uses float32
 tolerances (`rtol=1e-6`, `atol=1e-4`). The CLI's staged defaults use `runs/neural`
 for training and `artifacts/rating_model_neural` for export/prediction.
-Use `--backend lightgbm` with a separate `--output` to train the legacy estimator;
-its `--trials` and `--max-trees` options do not control neural training.
-
-No neural accuracy result is implied by these changes. Train and compare held-out
-MAE/RMSE with the legacy model on the same split before choosing deployment weights.
+Measure held-out MAE/RMSE by rating band and category before choosing deployment weights.
 
 ### Expanded Training Run
 
 The notebook now selects `PipelineConfig.expanded()`. This leaves the original
-configuration and released model unchanged and uses these targets:
+collection configuration unchanged and uses these targets:
 
 - 10 training bands: `[100,350)`, `[350,600)`, through `[2100,2350)`,
     then `[2350,2601)` to include rating 2600. Higher ratings have no discovery
@@ -113,16 +124,16 @@ If coverage needs older discovery data, set `discovery_month_limit=2` (or `None`
 for every collection month) in the Cell 1 settings. To disable the stall limit,
 replace the collection settings with `search_stagnation_expansions=None`.
 Changing discovery settings reruns the affected searches but reuses raw archives.
-Restart the kernel and rerun Cells 1-2 to load these changes; the new archive
+Restart the kernel, apply your settings overrides, and rerun Cell 3; the archive
 budget is 3,000 per category rather than 18,000 before cache reuse or early stops.
 
 To improve coverage or add known active high/low-rated players, edit Cell 1:
 
 ```python
 settings = replace(
-        settings,
-        discovery_seed_usernames=("additional_username",),
-        target_games=30000,  # Collect up to 90,000 candidates rather than 60,000.
+    settings,
+    discovery_seed_usernames=("additional_username",),
+    target_games=30000,
 )
 ```
 
@@ -143,14 +154,33 @@ Then run Cells 7-11 for analysis, training, evaluation and export.
 Cell 12 is an optional live-game demonstration.
 
 Expanded raw games, splits, analysis references and features live under
-`data/expanded`; neural exports go to `artifacts/rating_model_neural`. The original
-LightGBM bundles are not overwritten. The shared
+`data/expanded`; neural exports go to `artifacts/rating_model_neural`. The shared
 `data/analysis_cache` is keyed by game history and the complete engine contract,
 so unchanged evaluations are reused. Existing collection months and source-player
 caps must remain fixed when resuming; if the calendar advances, restore the saved
-months or choose new run directories.
+months or choose new run directories. The notebook rejects a mismatch with
+`Collection months or source-player cap changed`; do not delete the provenance
+sidecar to bypass that check. Before Cell 3, restore the recorded collection
+settings when intentionally resuming the same dataset:
 
-Evaluation retains the legacy broad-band reports and adds fine-band and
+```python
+saved_collection = json.loads(
+    settings.collection_settings_path.read_text(encoding="utf-8")
+)
+settings = replace(
+    settings,
+    collection=replace(
+        settings.collection,
+        months=tuple(tuple(month) for month in saved_collection["months"]),
+        max_games_per_player=saved_collection["source_player_cap"],
+    ),
+)
+```
+
+This example uses the imports from Cell 1. Retraining from existing compatible
+features can instead use the Cell 1, then Cells 9-11 shortcut above.
+
+Evaluation includes broad-band, fine-band and
 rating/category reports, including empty groups, row/player counts, MAE, RMSE,
 macro-player MAE and signed bias (prediction minus actual rating). Training quotas
 do not rebalance validation/test rows, and sparse holdout groups should not be
@@ -162,6 +192,8 @@ Individual stages are available through `python -m elo_model --help`.
 ## Predict
 
 ```python
+from pathlib import Path
+
 from elo_model.config import InferenceConfig
 from elo_model.inference import RatingEstimator
 
@@ -170,6 +202,7 @@ estimator = RatingEstimator(InferenceConfig(
     engine_executable="/path/to/stockfish",
     cache_directory="data/analysis_cache",
 ))
+pgn_text = Path("game.pgn").read_text(encoding="utf-8")
 estimate = estimator.predict_pgn(pgn_text)
 print(estimate.model_dump())
 ```

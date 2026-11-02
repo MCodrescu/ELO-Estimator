@@ -4,7 +4,7 @@ from collections import Counter
 
 import pandas as pd
 
-from .config import DEFAULT_SEED, StratificationConfig
+from .config import DEFAULT_SEED, PARTITIONS, StratificationConfig
 from .split import assert_disjoint, hash_fraction, normalize_player
 
 
@@ -36,7 +36,8 @@ class StratifiedGameSelector:
         """
         sides = self._side_rows(games)
         reports = []
-        for partition in ("train", "validation", "test"):
+
+        for partition in PARTITIONS:
             for quota in self.config.quotas:
                 mask = (
                     (sides["partition"] == partition)
@@ -45,17 +46,27 @@ class StratifiedGameSelector:
                 )
                 if quota.upper is not None:
                     mask &= sides["rating"] < quota.upper
+
                 eligible = sides.loc[mask]
-                reports.append({
-                    "partition": partition,
-                    "rating_band": quota.label,
-                    "category": quota.category,
-                    "rows": len(eligible),
-                    "players": eligible["target_username"].nunique(),
-                })
-        return pd.DataFrame(reports, columns=(
-            "partition", "rating_band", "category", "rows", "players",
-        ))
+                reports.append(
+                    {
+                        "partition": partition,
+                        "rating_band": quota.label,
+                        "category": quota.category,
+                        "rows": len(eligible),
+                        "players": eligible["target_username"].nunique(),
+                    }
+                )
+        return pd.DataFrame(
+            reports,
+            columns=(
+                "partition",
+                "rating_band",
+                "category",
+                "rows",
+                "players",
+            ),
+        )
 
     def _side_rows(self, games: pd.DataFrame) -> pd.DataFrame:
         """Expand eligible sides with stable sampling priorities.
@@ -74,7 +85,9 @@ class StratifiedGameSelector:
                         {
                             "game_id": record["game_id"],
                             "partition": record["partition"],
-                            "target_username": normalize_player(record[f"{color}_username"]),
+                            "target_username": normalize_player(
+                                record[f"{color}_username"]
+                            ),
                             "rating": record[f"{color}_rating"],
                             "category": record["category"],
                             "color": color,
@@ -84,9 +97,15 @@ class StratifiedGameSelector:
                         }
                     )
         return pd.DataFrame(
-            rows, columns=(
-                "game_id", "partition", "target_username", "rating", "category",
-                "color", "priority",
+            rows,
+            columns=(
+                "game_id",
+                "partition",
+                "target_username",
+                "rating",
+                "category",
+                "color",
+                "priority",
             ),
         )
 
@@ -101,6 +120,7 @@ class StratifiedGameSelector:
         """
         if games["game_id"].duplicated().any():
             raise ValueError("Duplicate games must be removed before selection")
+
         sides = self._side_rows(games)
         assert_disjoint(sides)
         self.coverage = pd.DataFrame()
@@ -111,28 +131,35 @@ class StratifiedGameSelector:
         selected = {"white": set(), "black": set()}
         player_counts = Counter()
         reports = []
+
         for quota in self.config.quotas:
             eligible = train.loc[
-                (train["category"] == quota.category)
-                & (train["rating"] >= quota.lower)
+                (train["category"] == quota.category) & (train["rating"] >= quota.lower)
             ]
             if quota.upper is not None:
                 eligible = eligible.loc[eligible["rating"] < quota.upper]
+
+            # Give each player a turn before selecting their additional games.
             ranked = eligible.sort_values(["priority", "game_id", "color"]).copy()
             ranked["player_round"] = ranked.groupby("target_username").cumcount()
-            ranked = ranked.sort_values(["player_round", "priority", "game_id", "color"])
+            ranked = ranked.sort_values(
+                ["player_round", "priority", "game_id", "color"]
+            )
             selected_players = set()
             count = 0
+
             for side in ranked.to_dict("records"):
                 player = side["target_username"]
                 if player_counts[player] >= self.config.max_rows_per_player:
                     continue
+
                 selected[side["color"]].add(side["game_id"])
                 player_counts[player] += 1
                 selected_players.add(player)
                 count += 1
                 if count == quota.rows:
                     break
+
             reports.append(
                 {
                     "rating_band": quota.label,
@@ -145,12 +172,15 @@ class StratifiedGameSelector:
                     "shortfall": quota.rows - count,
                 }
             )
+
         result = games.copy()
         training = result["partition"] == "train"
         for color in ("white", "black"):
-            result.loc[training, f"keep_{color}"] = (
-                result.loc[training, f"keep_{color}"]
-                & result.loc[training, "game_id"].isin(selected[color])
-            )
+            result.loc[training, f"keep_{color}"] = result.loc[
+                training, f"keep_{color}"
+            ] & result.loc[training, "game_id"].isin(selected[color])
+
         self.coverage = pd.DataFrame(reports)
-        return result.loc[result["keep_white"] | result["keep_black"]].reset_index(drop=True)
+        return result.loc[result["keep_white"] | result["keep_black"]].reset_index(
+            drop=True
+        )

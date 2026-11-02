@@ -42,6 +42,7 @@ def validate_source(source: dict) -> None:
         raise ValueError("unrated")
     if source.get("time_class") == "daily":
         raise ValueError("correspondence")
+
     for color in ("white", "black"):
         result = (source.get(color) or {}).get("result", "")
         if result in ("abandoned", "aborted"):
@@ -63,15 +64,18 @@ def training_record(source: dict) -> dict:
         raise ValueError("unfinished_or_empty")
     if any(clock is None for clock in game.clocks):
         raise ValueError("missing_clocks")
+
     _, _, category = game.time_control()
     if category is None:
         raise ValueError("unsupported_time_control")
+
     record = {
         "pgn": source["pgn"],
         "category": category,
         "termination": game.termination(),
         "time_control": game.headers["TimeControl"],
     }
+
     for color in ("white", "black"):
         name = game.headers.get(color.title(), "").strip()
         if not name or name == "?":
@@ -81,9 +85,11 @@ def training_record(source: dict) -> dict:
             raise ValueError("invalid_rating")
         record[f"{color}_username"] = name
         record[f"{color}_rating"] = rating
+
     termination = game.headers.get("Termination", "").lower()
     if "abandon" in termination or "abort" in termination:
         raise ValueError("abandoned_or_aborted")
+
     url = source.get("url", "")
     if url:
         parts = urlsplit(url)
@@ -92,6 +98,7 @@ def training_record(source: dict) -> dict:
         )
     else:
         identity = source["pgn"].strip()
+
     record["game_id"] = hashlib.sha256(identity.encode()).hexdigest()
     return record
 
@@ -137,6 +144,7 @@ class ModelDatasetBuilder:
             or target_games < 1
         ):
             raise ValueError("target_games must be a positive integer")
+
         initial = (
             pd.DataFrame(columns=COLUMNS)
             if initial_games is None
@@ -144,9 +152,11 @@ class ModelDatasetBuilder:
         )
         if not set(COLUMNS).issubset(initial.columns):
             raise ValueError("Cached games do not match the model collection schema")
+
         initial = initial.loc[:, list(COLUMNS)].drop_duplicates("game_id")
         if target_games is not None:
             initial = initial.head(target_games)
+
         records = initial.to_dict("records")
         seen = set(initial["game_id"])
         counts = Counter()
@@ -154,6 +164,7 @@ class ModelDatasetBuilder:
         limit = self.connection.config.max_games_per_player
         if target_games is not None and len(records) >= target_games:
             return initial.reset_index(drop=True)
+
         archives = self.connection.iter_raw_player_games(usernames)
         try:
             with tqdm(
@@ -175,10 +186,12 @@ class ModelDatasetBuilder:
                         record = self._eligible_record(source, seen)
                         if record is None:
                             continue
+
                         seen.add(record["game_id"])
                         records.append(record)
                         counts[owner] += 1
                         bar.update(1)
+
                     bar.set_postfix(
                         owner=owner,
                         rejected=sum(self.rejections.values()),
@@ -186,12 +199,14 @@ class ModelDatasetBuilder:
                     )
                     if checkpoint is not None:
                         checkpoint(pd.DataFrame(records, columns=COLUMNS))
+
                     if target_games is not None and len(records) >= target_games:
                         break
         finally:
             close = getattr(archives, "close", None)
             if close is not None:
                 close()
+
         logger.info(
             "Collected %d games; source-owner contributions=%s; rejected=%s",
             len(records),
@@ -216,7 +231,9 @@ class ModelDatasetBuilder:
             self.rejections[str(error)] += 1
             logger.info("Rejected %s: %s", source.get("url", "unknown"), error)
             return None
+
         if record["game_id"] in seen:
             self.rejections["duplicate"] += 1
             return None
+
         return record

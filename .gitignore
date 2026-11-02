@@ -21,13 +21,6 @@ htmlcov/
 # Collected games, engine evaluations, and model outputs
 data/
 artifacts/*
-!artifacts/rating_model/
-artifacts/rating_model/*
-!artifacts/rating_model/pooled.txt
-!artifacts/rating_model/model_manifest.json
-!artifacts/rating_model/feature_names.json
-!artifacts/rating_model/feature_groups.json
-!artifacts/rating_model/evaluation.json
 runs/
 *.parquet
 

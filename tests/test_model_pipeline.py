@@ -25,7 +25,6 @@ from elo_model.config import (
     PipelineConfig,
     RatingQuota,
     StratificationConfig,
-    TrainingConfig,
 )
 from elo_model.game import GameInput
 from elo_model.pipeline import (
@@ -77,7 +76,9 @@ class PipelineTests(unittest.TestCase):
         analyzer.analyze.return_value = ("fresh-key", [])
         game = GameInput.from_pgn(PGN)
         with patch("elo_model.pipeline.monotonic", side_effect=[10, 22]):
-            self.assertEqual(_timed_analysis(analyzer, game, False), ("fresh-key", False, 12))
+            self.assertEqual(
+                _timed_analysis(analyzer, game, False), ("fresh-key", False, 12)
+            )
 
         def cached_analysis(game, progress=False):
             """Simulate a cache hit on the worker-local analyzer.
@@ -94,7 +95,9 @@ class PipelineTests(unittest.TestCase):
 
         analyzer.analyze.side_effect = cached_analysis
         with patch("elo_model.pipeline.monotonic", return_value=100) as clock:
-            self.assertEqual(_timed_analysis(analyzer, game, False), ("cached-key", True, 0))
+            self.assertEqual(
+                _timed_analysis(analyzer, game, False), ("cached-key", True, 0)
+            )
             clock.assert_called_once()
 
     def test_analysis_eta_counts_only_uncached_remaining_tasks(self):
@@ -114,12 +117,23 @@ class PipelineTests(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as directory,
             patch("elo_model.pipeline.StockfishAnalyzer", return_value=analyzer),
-            patch("elo_model.pipeline._timed_analysis", side_effect=[
-                ("cached-key", True, 0), ("fresh-key", False, 8), ("fresh-key", False, 12),
-            ]),
+            patch(
+                "elo_model.pipeline._timed_analysis",
+                side_effect=[
+                    ("cached-key", True, 0),
+                    ("fresh-key", False, 8),
+                    ("fresh-key", False, 12),
+                ],
+            ),
             patch("elo_model.pipeline.tqdm", return_value=bar),
         ):
-            analyze_dataset(games, EngineConfig("mock"), directory, Path(directory) / "out.parquet", workers=1)
+            analyze_dataset(
+                games,
+                EngineConfig("mock"),
+                directory,
+                Path(directory) / "out.parquet",
+                workers=1,
+            )
         snapshots = [call.args[0] for call in bar.set_postfix.call_args_list]
         self.assertEqual(snapshots[0]["fresh_s_per_game"], "unknown")
         self.assertEqual(snapshots[0]["fresh_remaining"], 2)
@@ -139,15 +153,24 @@ class PipelineTests(unittest.TestCase):
         Returns:
             None; cache provenance and mandatory fast metadata are checked.
         """
-        settings = asdict(EngineConfig("mock", depth=None, multipv=1, time_seconds=.1,
-                                      played_move_scoring="next-position"))
+        settings = asdict(
+            EngineConfig(
+                "mock",
+                depth=None,
+                multipv=1,
+                time_seconds=0.1,
+                played_move_scoring="next-position",
+            )
+        )
         settings.pop("executable")
         metadata = {"settings": settings, "analysis_version": 2}
         frame = pd.DataFrame([{"pgn": PGN, "analysis_key": "a" * 64}])
         feature_config = FeatureConfig(schema_version=2)
         with tempfile.TemporaryDirectory() as directory:
             with self.assertRaisesRegex(ValueError, "cache key"):
-                extract_dataset(frame, directory, feature_config, engine_metadata=metadata)
+                extract_dataset(
+                    frame, directory, feature_config, engine_metadata=metadata
+                )
             with self.assertRaisesRegex(ValueError, "provenance"):
                 extract_dataset(frame, directory, feature_config)
 
@@ -160,14 +183,17 @@ class PipelineTests(unittest.TestCase):
         Returns:
             None; selected training counts, hold-outs and selection sidecars are asserted.
         """
-        frame = pd.DataFrame([
-            training_record(source)
-            for _, archive in self.notebook_archives(90)
-            for source in archive
-        ])
-        config = StratificationConfig(max_rows_per_player=1, quotas=(
-            RatingQuota(lower=0, category="blitz", rows=12),
-        ))
+        frame = pd.DataFrame(
+            [
+                training_record(source)
+                for _, archive in self.notebook_archives(90)
+                for source in archive
+            ]
+        )
+        config = StratificationConfig(
+            max_rows_per_player=1,
+            quotas=(RatingQuota(lower=0, category="blitz", rows=12),),
+        )
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source, output = root / "games.parquet", root / "split.parquet"
@@ -175,8 +201,15 @@ class PipelineTests(unittest.TestCase):
             write_parquet(source, frame)
             write_json(config_path, config.model_dump(mode="json"))
             self.run_cli(
-                "split", "--input", str(source), "--output", str(output),
-                "--selection-config", str(config_path), "--min-rows", "2",
+                "split",
+                "--input",
+                str(source),
+                "--output",
+                str(output),
+                "--selection-config",
+                str(config_path),
+                "--min-rows",
+                "2",
             )
             selected = pd.read_parquet(output)
             train = selected.loc[selected["partition"] == "train"]
@@ -205,7 +238,10 @@ class PipelineTests(unittest.TestCase):
             for workers in (0, -1, True, 1.5):
                 with self.subTest(workers=workers), self.assertRaises(ValueError):
                     analyze_dataset(
-                        games, config, "cache", "output",
+                        games,
+                        config,
+                        "cache",
+                        "output",
                         workers=workers,
                     )
             factory.assert_not_called()
@@ -221,7 +257,10 @@ class PipelineTests(unittest.TestCase):
         """
         analyzer = MagicMock(metadata={"engine": "failure-test"})
         analyzer.__enter__.return_value = analyzer
-        analyzer.analyze.side_effect = [("cached-key", []), RuntimeError("engine failed")]
+        analyzer.analyze.side_effect = [
+            ("cached-key", []),
+            RuntimeError("engine failed"),
+        ]
         analyzer.cache_hits = 1
         analyzer.analyzed_games = 0
         games = pd.DataFrame({"game_id": [0, 1], "pgn": [PGN, PGN]})
@@ -249,7 +288,9 @@ class PipelineTests(unittest.TestCase):
         Returns:
             None; cumulative seconds per game is checked with a controlled clock.
         """
-        with tqdm(total=20, unit="game", smoothing=0, mininterval=0, file=io.StringIO()) as bar:
+        with tqdm(
+            total=20, unit="game", smoothing=0, mininterval=0, file=io.StringIO()
+        ) as bar:
             clock = Mock(return_value=10)
             bar._time = clock
             bar.start_t = 0
@@ -273,9 +314,10 @@ class PipelineTests(unittest.TestCase):
             path = Path(directory) / "split.parquet"
             write_parquet(path, pd.DataFrame({"pgn": [PGN]}))
             for options, workers in (((), 8), (("--workers", "2"), 2)):
-                with self.subTest(workers=workers), patch(
-                    "elo_model.__main__.analyze_dataset"
-                ) as analyze:
+                with (
+                    self.subTest(workers=workers),
+                    patch("elo_model.__main__.analyze_dataset") as analyze,
+                ):
                     self.run_cli(
                         "analyze", "--stockfish", "mock", "--input", str(path), *options
                     )
@@ -335,13 +377,17 @@ class PipelineTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "analyzed.parquet"
             with (
-                patch("elo_model.pipeline.StockfishAnalyzer", side_effect=analyzers) as factory,
+                patch(
+                    "elo_model.pipeline.StockfishAnalyzer", side_effect=analyzers
+                ) as factory,
                 patch("elo_model.pipeline.write_parquet", side_effect=checkpoint),
             ):
                 result = analyze_dataset(games, EngineConfig("mock"), directory, output)
             self.assertEqual(factory.call_count, 8)
             self.assertEqual(result, metadata)
-            self.assertEqual(pd.read_parquet(output)["game_id"].tolist(), list(range(16)))
+            self.assertEqual(
+                pd.read_parquet(output)["game_id"].tolist(), list(range(16))
+            )
             self.assertEqual(len(frames), 16)
             self.assertEqual([len(frame) for frame in frames], list(range(1, 17)))
             for analyzer in analyzers:
@@ -363,14 +409,21 @@ class PipelineTests(unittest.TestCase):
             latest = pd.DataFrame({"game_id": ["old", "new"]})
             write_parquet(path, previous)
             with (
-                patch("elo_model.storage.os.replace", side_effect=PermissionError("permanent lock")),
+                patch(
+                    "elo_model.storage.os.replace",
+                    side_effect=PermissionError("permanent lock"),
+                ),
                 patch("elo_model.storage.time.sleep"),
                 self.assertLogs("elo_model.storage", level="WARNING") as logs,
                 self.assertRaisesRegex(PermissionError, "permanent lock"),
             ):
                 write_parquet(path, latest)
             pd.testing.assert_frame_equal(pd.read_parquet(path), previous)
-            recovery = [candidate for candidate in Path(directory).glob("*.parquet") if candidate != path]
+            recovery = [
+                candidate
+                for candidate in Path(directory).glob("*.parquet")
+                if candidate != path
+            ]
             self.assertEqual(len(recovery), 1)
             pd.testing.assert_frame_equal(pd.read_parquet(recovery[0]), latest)
             self.assertIn("Completed recovery file retained", logs.output[-1])
@@ -388,7 +441,10 @@ class PipelineTests(unittest.TestCase):
             None; bounded retry calls, delay handling and final errors are asserted.
         """
         with (
-            patch("elo_model.storage.os.replace", side_effect=[PermissionError("locked"), None]) as replace_file,
+            patch(
+                "elo_model.storage.os.replace",
+                side_effect=[PermissionError("locked"), None],
+            ) as replace_file,
             patch("elo_model.storage.time.sleep") as backoff,
             self.assertLogs("elo_model.storage", level="WARNING"),
         ):
@@ -398,16 +454,24 @@ class PipelineTests(unittest.TestCase):
         backoff.assert_called_once()
 
         with (
-            patch("elo_model.storage.os.replace", side_effect=[PermissionError("locked")] * 6 + [None]) as replace_file,
+            patch(
+                "elo_model.storage.os.replace",
+                side_effect=[PermissionError("locked")] * 6 + [None],
+            ) as replace_file,
             patch("elo_model.storage.time.sleep") as backoff,
             self.assertLogs("elo_model.storage", level="WARNING"),
         ):
             replace_checkpoint(Path("source"), Path("destination"))
         self.assertEqual(replace_file.call_count, 7)
-        self.assertEqual([call.args[0] for call in backoff.call_args_list], [.1, .2, .4, .8, 1.6, 2])
+        self.assertEqual(
+            [call.args[0] for call in backoff.call_args_list],
+            [0.1, 0.2, 0.4, 0.8, 1.6, 2],
+        )
 
         with (
-            patch("elo_model.storage.os.replace", side_effect=PermissionError("permanent")),
+            patch(
+                "elo_model.storage.os.replace", side_effect=PermissionError("permanent")
+            ),
             patch("elo_model.storage.time.sleep"),
             self.assertLogs("elo_model.storage", level="WARNING"),
             self.assertRaisesRegex(PermissionError, "permanent"),
@@ -446,12 +510,14 @@ class PipelineTests(unittest.TestCase):
                 artifact_directory=root / "model",
                 split_fractions=(0.6, 0.2, 0.2),
                 min_players_per_partition=2,
-                stratification=StratificationConfig(quotas=(
-                    RatingQuota(lower=0, category="blitz", rows=1000),
-                )),
-                training=TrainingConfig(trials=0, max_trees=5, min_rows=2),
+                stratification=StratificationConfig(
+                    quotas=(RatingQuota(lower=0, category="blitz", rows=1000),)
+                ),
                 neural_training=NeuralTrainingConfig(
-                    hidden_sizes=(8,), max_epochs=2, min_rows=2, progress=False,
+                    hidden_sizes=(8,),
+                    max_epochs=2,
+                    min_rows=2,
+                    progress=False,
                 ),
             )
             archives = self.notebook_archives(settings.candidate_games)
@@ -509,10 +575,15 @@ class PipelineTests(unittest.TestCase):
 
                 self.run_notebook_stage(cells[3], namespace, root)
                 self.run_notebook_stage(cells[4], namespace, root)
-                namespace["settings"] = replace(settings, min_training_group_players=100)
+                namespace["settings"] = replace(
+                    settings, min_training_group_players=100
+                )
                 namespace["allow_underfilled_bands"] = False
                 preflight = (
-                    "try:\n" + indent(cells[4].replace("allow_underfilled_bands = True", ""), "    ")
+                    "try:\n"
+                    + indent(
+                        cells[4].replace("allow_underfilled_bands = True", ""), "    "
+                    )
                     + "\nexcept ValueError as error:\n    preflight_error = str(error)\n"
                 )
                 self.run_notebook_stage(preflight, namespace, root)
@@ -540,9 +611,12 @@ class PipelineTests(unittest.TestCase):
                 (settings.artifact_directory / "model_manifest.json").read_text()
             )
             self.assertEqual(
-                manifest["selection"]["config"], settings.stratification.model_dump(mode="json")
+                manifest["selection"]["config"],
+                settings.stratification.model_dump(mode="json"),
             )
-            self.assertEqual(manifest["selection"]["candidate_games"], settings.candidate_games)
+            self.assertEqual(
+                manifest["selection"]["candidate_games"], settings.candidate_games
+            )
             self.assertEqual(manifest["model_backend"], "pytorch")
             self.assertTrue((settings.artifact_directory / "pooled.pt").exists())
             self.assertEqual(manifest["dataset_games"], len(namespace["split_games"]))
@@ -621,47 +695,62 @@ class PipelineTests(unittest.TestCase):
         Returns:
             None; neural export succeeds without raw games or a split manifest.
         """
-        notebook_path = Path(__file__).resolve().parent.parent / "build_training_data.ipynb"
+        notebook_path = (
+            Path(__file__).resolve().parent.parent / "build_training_data.ipynb"
+        )
         notebook = json.loads(notebook_path.read_text(encoding="utf-8"))
-        cells = ["".join(cell["source"]) for cell in notebook["cells"] if cell["cell_type"] == "code"]
+        cells = [
+            "".join(cell["source"])
+            for cell in notebook["cells"]
+            if cell["cell_type"] == "code"
+        ]
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             settings = PipelineConfig(
-                data_directory=root, analysis_directory=root, artifact_directory=root / "model",
-                neural_training=NeuralTrainingConfig(hidden_sizes=(8,), max_epochs=2, progress=False),
+                data_directory=root,
+                analysis_directory=root,
+                artifact_directory=root / "model",
+                neural_training=NeuralTrainingConfig(
+                    hidden_sizes=(8,), max_epochs=2, progress=False
+                ),
             )
-            save_feature_dataset(synthetic_frame(), settings.features_path, sample_engine_metadata())
+            save_feature_dataset(
+                synthetic_frame(), settings.features_path, sample_engine_metadata()
+            )
             namespace = {}
-            with contextlib.redirect_stdout(io.StringIO()), patch("logging.basicConfig"):
+            with (
+                contextlib.redirect_stdout(io.StringIO()),
+                patch("logging.basicConfig"),
+            ):
                 self.run_notebook_stage(cells[0], namespace, root)
                 namespace["settings"] = settings
                 for source in cells[8:11]:
                     self.run_notebook_stage(source, namespace, root)
             self.assertNotIn("split_games", namespace)
             self.assertNotIn("games_df", namespace)
-            self.assertEqual(namespace["predictor"].manifest["model_backend"], "pytorch")
-            self.assertEqual(len(namespace["prediction_preview"]), settings.preview_rows)
+            self.assertEqual(
+                namespace["predictor"].manifest["model_backend"], "pytorch"
+            )
+            self.assertEqual(
+                len(namespace["prediction_preview"]), settings.preview_rows
+            )
 
-    def test_cli_legacy_lightgbm_backend(self):
-        """Keep the explicit legacy training option functional after the default change.
+    def test_cli_rejects_removed_tree_options(self):
+        """Reject obsolete training switches instead of silently ignoring them.
 
         Args:
             None.
 
         Returns:
-            None; the LightGBM option exports a tree bundle.
+            None; unsupported training options cause argument parsing to fail.
         """
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            features, output = root / "features.parquet", root / "trees"
-            save_feature_dataset(synthetic_frame(), features, sample_engine_metadata())
-            self.run_cli(
-                "train", "--backend", "lightgbm", "--input", str(features),
-                "--output", str(output), "--trials", "0", "--max-trees", "5",
-            )
-            manifest = json.loads((output / "model_manifest.json").read_text())
-            self.assertEqual(manifest["model_backend"], "lightgbm")
-            self.assertEqual(manifest["models"], {"pooled": "pooled.txt"})
+        for option in ("--backend", "--trials", "--max-trees"):
+            with self.subTest(option=option):
+                with (
+                    contextlib.redirect_stderr(io.StringIO()),
+                    self.assertRaises(SystemExit),
+                ):
+                    self.run_cli("train", option, "unused")
 
     def test_cli_train_export_predict(self):
         """Exercise the offline CLI with vector and PGN-analysis inference.
@@ -684,10 +773,6 @@ class PipelineTests(unittest.TestCase):
                 str(features),
                 "--output",
                 str(trained),
-                "--trials",
-                "0",
-                "--max-trees",
-                "5",
                 "--max-epochs",
                 "2",
                 "--hidden-sizes",
@@ -697,11 +782,15 @@ class PipelineTests(unittest.TestCase):
                 "test-v1",
             )
             self.assertEqual(
-                json.loads((trained / "model_manifest.json").read_text())["model_version"],
+                json.loads((trained / "model_manifest.json").read_text())[
+                    "model_version"
+                ],
                 "test-v1",
             )
             self.assertEqual(
-                json.loads((trained / "model_manifest.json").read_text())["model_backend"],
+                json.loads((trained / "model_manifest.json").read_text())[
+                    "model_backend"
+                ],
                 "pytorch",
             )
             self.run_cli(
@@ -716,7 +805,9 @@ class PipelineTests(unittest.TestCase):
                 "test-v2",
             )
             self.assertEqual(
-                json.loads((exported / "model_manifest.json").read_text())["model_version"],
+                json.loads((exported / "model_manifest.json").read_text())[
+                    "model_version"
+                ],
                 "test-v2",
             )
             output = root / "predictions.json"

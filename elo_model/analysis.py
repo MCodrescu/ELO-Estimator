@@ -112,9 +112,11 @@ class AnalysisCache:
             character not in "0123456789abcdef" for character in key
         ):
             raise ValueError("Invalid analysis cache key")
+
         path = self.directory / f"{key}.parquet"
         if not path.exists():
             return None
+
         frame = pd.read_parquet(path)
         if len(frame) != 1 or frame.iloc[0]["key"] != key:
             raise ValueError(f"Invalid cache record: {path}")
@@ -180,10 +182,12 @@ class StockfishAnalyzer:
         path = Path(self.config.executable).resolve(strict=True)
         with path.open("rb") as handle:
             binary_hash = hashlib.file_digest(handle, "sha256").hexdigest()
+
         if sys.platform == "win32" and isinstance(
             asyncio.get_event_loop_policy(), asyncio.WindowsSelectorEventLoopPolicy
         ):
             asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
         self.engine = chess.engine.SimpleEngine.popen_uci(str(path))
         try:
             self.engine.configure(
@@ -193,6 +197,7 @@ class StockfishAnalyzer:
             self.engine.quit()
             self.engine = None
             raise
+
         settings = asdict(self.config)
         settings.pop("executable")
         self.metadata = {
@@ -201,14 +206,18 @@ class StockfishAnalyzer:
             "settings": settings,
             "analysis_version": ANALYSIS_VERSION,
         }
-        self.metadata.update({
-            "initialization": "clear-hash-per-game",
-            "position_order": "initial-then-reached-chronological-full-history",
-            "uci_defaults": {
-                name: option.default for name, option in self.engine.options.items()
-                if name not in (CLEAR_HASH_OPTION, "Threads", "Hash", "MultiPV")
-            },
-        })
+        self.metadata.update(
+            {
+                "initialization": "clear-hash-per-game",
+                "position_order": "initial-then-reached-chronological-full-history",
+                "uci_defaults": {
+                    name: option.default
+                    for name, option in self.engine.options.items()
+                    if name not in (CLEAR_HASH_OPTION, "Threads", "Hash", "MultiPV")
+                },
+            }
+        )
+
         return self
 
     def __exit__(self, exception_type, exception, traceback):
@@ -240,8 +249,10 @@ class StockfishAnalyzer:
         mate = score.mate()
         if mate is None:
             return Score(cp=score.score())
+
         if mate == 0:
             mate = 1 if score.score(mate_score=10000) > 0 else -1
+
         return Score(mate=mate)
 
     def _position(self, board: chess.Board) -> PositionAnalysis:
@@ -258,11 +269,11 @@ class StockfishAnalyzer:
             evaluation = Score(cp=0)
             if outcome.winner is not None:
                 evaluation = Score(mate=1 if outcome.winner else -1)
-            return PositionAnalysis(
-                board.fen(), (), depth=0, evaluation=evaluation
-            )
+            return PositionAnalysis(board.fen(), (), depth=0, evaluation=evaluation)
+
         limit = chess.engine.Limit(
-            depth=self.config.depth, time=self.config.time_seconds,
+            depth=self.config.depth,
+            time=self.config.time_seconds,
             nodes=self.config.nodes,
         )
         infos = self._bounded_infos(board, limit)
@@ -276,11 +287,14 @@ class StockfishAnalyzer:
             )
             for info in infos
         )
+
         return PositionAnalysis(
             board.fen(), candidates, candidates[0].depth, candidates[0].score
         )
 
-    def _bounded_infos(self, board: chess.Board, limit: chess.engine.Limit) -> list[dict]:
+    def _bounded_infos(
+        self, board: chess.Board, limit: chess.engine.Limit
+    ) -> list[dict]:
         """Keep the last complete exact iteration within a single bounded search.
 
         Args:
@@ -291,16 +305,22 @@ class StockfishAnalyzer:
             Exact ranked scores at one completed depth; no synthesized candidates.
         """
         latest = None
+
         with self.engine.analysis(board, limit, multipv=self.config.multipv) as stream:
             for info in stream:
                 if not info.get("pv") or "score" not in info or "depth" not in info:
                     continue
                 if info.get("lowerbound") or info.get("upperbound"):
                     continue
-                if info.get("multipv", 1) == 1 and (latest is None or info["depth"] >= latest["depth"]):
+
+                if info.get("multipv", 1) == 1 and (
+                    latest is None or info["depth"] >= latest["depth"]
+                ):
                     latest = info
+
         if latest is not None:
             return [latest]
+
         raise ValueError("Search budget produced no complete exact candidate iteration")
 
     def analyze(
@@ -317,13 +337,16 @@ class StockfishAnalyzer:
         """
         if self.engine is None or self.metadata is None:
             raise RuntimeError("Use StockfishAnalyzer as a context manager")
+
         key = self.cache.key(game, self.metadata)
         cached = self.cache.load(key)
         if cached is not None:
             self.cache_hits += 1
             return key, cached
+
         if CLEAR_HASH_OPTION not in self.engine.options:
             raise ValueError("Game-local hash policy requires Clear Hash support")
+
         self.engine.configure({CLEAR_HASH_OPTION: None})
         boards = tqdm(
             game.boards(),
@@ -335,4 +358,5 @@ class StockfishAnalyzer:
         result = [self._position(board) for board in boards]
         self.cache.save(key, result)
         self.analyzed_games += 1
+
         return key, result

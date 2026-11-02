@@ -15,6 +15,7 @@ from .analysis import AnalysisCache, StockfishAnalyzer
 from .analysis_progress import AnalysisTiming
 from .config import (
     DEFAULT_ANALYSIS_WORKERS,
+    FEATURE_SCHEMA_VERSION,
     EngineConfig,
     FeatureConfig,
     validate_feature_engine,
@@ -77,7 +78,9 @@ def split_summary(games: pd.DataFrame) -> dict:
     }
 
 
-def _timed_analysis(analyzer: StockfishAnalyzer, game: GameInput, progress: bool) -> tuple[str, bool, float]:
+def _timed_analysis(
+    analyzer: StockfishAnalyzer, game: GameInput, progress: bool
+) -> tuple[str, bool, float]:
     """Measure fresh game analysis separately from cached results.
 
     Args:
@@ -120,25 +123,37 @@ def analyze_dataset(
     """
     if isinstance(workers, bool) or not isinstance(workers, int) or workers < 1:
         raise ValueError("workers must be a positive integer")
+
     cache = AnalysisCache(cache_directory)
     records = {}
     remaining = iter(enumerate(games.to_dict("records")))
+
     with ExitStack() as stack:
         analyzers = [
             stack.enter_context(StockfishAnalyzer(config, cache))
             for _ in range(min(workers, max(1, len(games))))
         ]
+
         metadata = analyzers[0].metadata
         if any(analyzer.metadata != metadata for analyzer in analyzers):
             raise ValueError("Analysis workers have inconsistent engine metadata")
+
         sidecar = Path(output).with_suffix(".engine.json")
-        previous = json.loads(sidecar.read_text(encoding="utf-8")) if sidecar.exists() else metadata
+        previous = (
+            json.loads(sidecar.read_text(encoding="utf-8"))
+            if sidecar.exists()
+            else metadata
+        )
         if Path(output).exists() and previous != metadata:
-            raise ValueError("Use a separate analyzed manifest for each engine contract")
+            raise ValueError(
+                "Use a separate analyzed manifest for each engine contract"
+            )
         write_json(Path(output).with_suffix(".engine.json"), metadata)
+
         timing = AnalysisTiming(games, cache, metadata, len(analyzers))
         executor = stack.enter_context(ThreadPoolExecutor(max_workers=len(analyzers)))
         pending = {}
+
         for analyzer in analyzers:
             item = next(remaining, None)
             if item is not None:
@@ -150,6 +165,7 @@ def analyze_dataset(
                     progress=progress and workers == 1,
                 )
                 pending[future] = (index, record, analyzer)
+
         with tqdm(
             total=len(games),
             desc="Analyze games",
@@ -166,14 +182,18 @@ def analyze_dataset(
                     index, record, analyzer = pending.pop(future)
                     key, cached, seconds = future.result()
                     records[index] = {**record, "analysis_key": key}
+
+                    # Completion order varies; checkpoints retain the original game order.
                     write_parquet(
-                        output, pd.DataFrame([records[index] for index in sorted(records)])
+                        output,
+                        pd.DataFrame([records[index] for index in sorted(records)]),
                     )
                     bar.set_postfix(
                         timing.record(index, cached, seconds),
                         refresh=False,
                     )
                     bar.update(1)
+
                     item = next(remaining, None)
                     if item is not None:
                         index, record = item
@@ -184,6 +204,7 @@ def analyze_dataset(
                             progress=progress and workers == 1,
                         )
                         pending[following] = (index, record, analyzer)
+
     return metadata
 
 
@@ -210,6 +231,7 @@ def extract_dataset(
     validate_feature_engine(extractor.config, engine_metadata)
     cache = AnalysisCache(cache_directory)
     records = []
+
     for game in tqdm(
         games.to_dict("records"),
         desc="Extract features",
@@ -217,17 +239,25 @@ def extract_dataset(
         disable=not progress,
     ):
         parsed = GameInput.from_pgn(game["pgn"])
-        if engine_metadata is not None and cache.key(parsed, engine_metadata) != game["analysis_key"]:
-            raise ValueError("Analysis cache key does not match the requested engine contract")
+        if (
+            engine_metadata is not None
+            and cache.key(parsed, engine_metadata) != game["analysis_key"]
+        ):
+            raise ValueError(
+                "Analysis cache key does not match the requested engine contract"
+            )
+
         analysis = cache.load(game["analysis_key"])
         if analysis is None:
             raise ValueError(
                 f"Missing cached analysis for {game['game_id']}; run analyze first"
             )
+
         matrix = extractor.extract(parsed, analysis)
         for index, color in enumerate(("white", "black")):
             if not game[f"keep_{color}"]:
                 continue
+
             records.append(
                 {
                     **dict(zip(extractor.schema.names, matrix[index])),
@@ -238,6 +268,7 @@ def extract_dataset(
                     "category": game["category"],
                 }
             )
+
     frame = pd.DataFrame(
         records,
         columns=(
@@ -301,7 +332,10 @@ def load_feature_metadata(path: str | Path) -> dict:
     )
     schema = feature_schema(metadata["schema_version"])
     config = FeatureConfig(**metadata["feature_config"])
-    if config.schema_version != schema.version or metadata["feature_hash"] != schema.fingerprint:
+    if (
+        config.schema_version != schema.version
+        or metadata["feature_hash"] != schema.fingerprint
+    ):
         raise ValueError("Feature metadata schema mismatch")
     validate_feature_engine(config, metadata.get("engine"))
     return metadata
@@ -312,7 +346,7 @@ def export_sample(frame: pd.DataFrame, models: dict, limit: int = 64) -> pd.Data
 
     Args:
         frame: Feature rows with unchanged partition/category metadata.
-        models: Native booster mapping to verify.
+        models: Neural model mapping to verify.
         limit: Maximum sample rows per exported model.
 
     Returns:
@@ -332,7 +366,9 @@ def export_sample(frame: pd.DataFrame, models: dict, limit: int = 64) -> pd.Data
     return sample
 
 
-def feature_missingness(frame: pd.DataFrame, schema_version: int = 2) -> dict:
+def feature_missingness(
+    frame: pd.DataFrame, schema_version: int = FEATURE_SCHEMA_VERSION
+) -> dict:
     """Report absent features explicitly so sparse phases are visible.
 
     Args:

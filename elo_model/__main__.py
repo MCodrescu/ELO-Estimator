@@ -21,7 +21,6 @@ from .config import (
     FeatureConfig,
     NeuralTrainingConfig,
     StratificationConfig,
-    TrainingConfig,
 )
 from .evaluation import BAND_NAMES, rating_bands
 from .feature_schema import feature_schema
@@ -41,7 +40,6 @@ from .predictor import RatingPredictor, export_bundle
 from .selection import StratifiedGameSelector
 from .split import PlayerSplitter
 from .storage import write_json, write_parquet
-from .training import ModelTrainer
 
 DEFAULT_FEATURES = str(CLI_CONFIG.features_path)
 logger = logging.getLogger(__name__)
@@ -115,7 +113,8 @@ def run_split(args):
     )
     selection_config = (
         StratificationConfig.model_validate(read_json(args.selection_config))
-        if args.selection_config else CLI_CONFIG.stratification
+        if args.selection_config
+        else CLI_CONFIG.stratification
     )
     selector = StratifiedGameSelector(selection_config, seed=args.seed)
     manifest = selector.select(splitter.assign(games))
@@ -165,8 +164,12 @@ def run_analyze(args):
         None; writes resumable analyzed-game and engine metadata artifacts.
     """
     config = EngineConfig(
-        args.stockfish, args.depth, threads=args.threads, hash_mb=args.hash_mb,
-        time_seconds=args.time_seconds, nodes=args.nodes,
+        args.stockfish,
+        args.depth,
+        threads=args.threads,
+        hash_mb=args.hash_mb,
+        time_seconds=args.time_seconds,
+        nodes=args.nodes,
     )
     games = pd.read_parquet(args.input)
     analyze_dataset(games, config, args.cache, args.output, workers=args.workers)
@@ -188,13 +191,16 @@ def run_features(args):
     frame = extract_dataset(games, args.cache, config, engine_metadata=metadata)
     save_feature_dataset(frame, args.output, metadata, config)
     write_json(
-        Path(args.output).with_suffix(".missingness.json"), feature_missingness(frame, config.schema_version)
+        Path(args.output).with_suffix(".missingness.json"),
+        feature_missingness(frame, config.schema_version),
     )
-    print(f"Extracted {len(frame)} rows with {len(feature_schema(config.schema_version).names)} features")
+    print(
+        f"Extracted {len(frame)} rows with {len(feature_schema(config.schema_version).names)} features"
+    )
 
 
 def run_train(args):
-    """Train selected native models and print baseline comparisons.
+    """Train neural rating models and print baseline comparisons.
 
     Args:
         args: Feature table, output directory and bounded experiment settings.
@@ -205,22 +211,25 @@ def run_train(args):
     frame = pd.read_parquet(args.input)
     metadata = load_feature_metadata(args.input)
     feature_config = FeatureConfig(**metadata["feature_config"])
-    common = {
-        "mode": args.mode, "seed": args.seed, "min_rows": args.min_rows,
-        "balance_bands": args.balance_bands, "balance_players": args.balance_players,
-        "threads": args.threads,
-    }
-    if args.backend == "pytorch":
-        config = NeuralTrainingConfig(
-            **common, hidden_sizes=tuple(args.hidden_sizes), dropout=args.dropout,
-            learning_rate=args.learning_rate, weight_decay=args.weight_decay,
-            batch_size=args.batch_size, max_epochs=args.max_epochs,
-            patience=args.patience, device=args.device, progress=args.progress,
-        )
-        result = TorchModelTrainer(config, feature_config).fit(frame)
-    else:
-        config = TrainingConfig(**common, trials=args.trials, max_trees=args.max_trees)
-        result = ModelTrainer(config, feature_config).fit(frame)
+    config = NeuralTrainingConfig(
+        mode=args.mode,
+        seed=args.seed,
+        min_rows=args.min_rows,
+        balance_bands=args.balance_bands,
+        balance_players=args.balance_players,
+        threads=args.threads,
+        hidden_sizes=tuple(args.hidden_sizes),
+        dropout=args.dropout,
+        learning_rate=args.learning_rate,
+        weight_decay=args.weight_decay,
+        batch_size=args.batch_size,
+        max_epochs=args.max_epochs,
+        patience=args.patience,
+        device=args.device,
+        progress=args.progress,
+    )
+
+    result = TorchModelTrainer(config, feature_config).fit(frame)
     result.metadata.update(metadata)
     sample = export_sample(frame, result.models)
     verification = export_bundle(
@@ -295,7 +304,9 @@ def run_predict(args):
         payload = read_json(args.analysis)
         game = GameInput.from_pgn(Path(args.pgn).read_text(encoding="utf-8"))
         result = predictor.predict_game(
-            game, analysis_from_payload(payload["positions"]), payload.get("engine"),
+            game,
+            analysis_from_payload(payload["positions"]),
+            payload.get("engine"),
             engine_compatibility=args.engine_compatibility,
         )
     if args.output:
@@ -323,7 +334,9 @@ def parser() -> argparse.ArgumentParser:
     )
     collect.add_argument("--usernames", default=str(CLI_CONFIG.usernames_path))
     collect.add_argument("--months", nargs="+", required=True, metavar="YYYY-MM")
-    collect.add_argument("--max-games", type=int, default=CLI_CONFIG.collection.max_games_per_player)
+    collect.add_argument(
+        "--max-games", type=int, default=CLI_CONFIG.collection.max_games_per_player
+    )
     collect.add_argument("--user-agent", required=True)
     collect.add_argument("--proxy", default=CLI_CONFIG.collection.proxy_url)
     collect.add_argument("--output", default=str(CLI_CONFIG.raw_games_path))
@@ -334,12 +347,17 @@ def parser() -> argparse.ArgumentParser:
     )
     split.add_argument("--input", default=str(CLI_CONFIG.raw_games_path))
     split.add_argument("--output", default=str(CLI_CONFIG.split_path))
-    split.add_argument("--fractions", type=float, nargs=3, default=CLI_CONFIG.split_fractions)
-    split.add_argument("--seed", type=int, default=CLI_CONFIG.training.seed)
-    split.add_argument("--min-rows", type=int, default=CLI_CONFIG.training.min_rows)
+    split.add_argument(
+        "--fractions", type=float, nargs=3, default=CLI_CONFIG.split_fractions
+    )
+    split.add_argument("--seed", type=int, default=CLI_CONFIG.neural_training.seed)
+    split.add_argument(
+        "--min-rows", type=int, default=CLI_CONFIG.neural_training.min_rows
+    )
     split.add_argument("--strict-participants", action="store_true")
     split.add_argument(
-        "--selection-config", help="JSON training quotas; use an empty object to disable selection",
+        "--selection-config",
+        help="JSON training quotas; use an empty object to disable selection",
     )
     split.set_defaults(handler=run_split)
 
@@ -350,12 +368,16 @@ def parser() -> argparse.ArgumentParser:
     analyze.add_argument("--output", default=str(CLI_CONFIG.analyzed_path))
     analyze.add_argument("--stockfish", required=True)
     analyze.add_argument("--depth", type=int, help="Optional additional depth cap")
-    analyze.add_argument("--time-seconds", type=float, default=CLI_CONFIG.engine.time_seconds)
+    analyze.add_argument(
+        "--time-seconds", type=float, default=CLI_CONFIG.engine.time_seconds
+    )
     analyze.add_argument("--nodes", type=int)
     analyze.add_argument("--threads", type=int, default=CLI_CONFIG.engine.threads)
     analyze.add_argument("--hash-mb", type=int, default=CLI_CONFIG.engine.hash_mb)
     analyze.add_argument(
-        "--workers", type=int, default=DEFAULT_ANALYSIS_WORKERS,
+        "--workers",
+        type=int,
+        default=DEFAULT_ANALYSIS_WORKERS,
         help="Concurrent Stockfish processes; --threads and --hash-mb apply per process",
     )
     analyze.add_argument("--cache", default=str(CLI_CONFIG.engine_cache_directory))
@@ -373,30 +395,57 @@ def parser() -> argparse.ArgumentParser:
     features.set_defaults(handler=run_features)
 
     train = commands.add_parser(
-        "train", help="Tune, evaluate, and save native Python models"
+        "train", help="Train, evaluate, and save PyTorch rating models"
     )
     train.add_argument("--input", default=DEFAULT_FEATURES)
     train.add_argument("--output", default=str(NEURAL_TRAINING_DIRECTORY))
-    train.add_argument("--backend", choices=("pytorch", "lightgbm"), default="pytorch")
-    train.add_argument("--mode", choices=("pooled", "separate"), default=CLI_CONFIG.training.mode)
-    train.add_argument("--trials", type=int, default=CLI_CONFIG.training.trials)
-    train.add_argument("--max-trees", type=int, default=CLI_CONFIG.training.max_trees)
-    train.add_argument("--min-rows", type=int, default=CLI_CONFIG.training.min_rows)
-    train.add_argument("--threads", type=int, default=CLI_CONFIG.training.threads)
-    train.add_argument("--seed", type=int, default=CLI_CONFIG.training.seed)
+    train.add_argument(
+        "--mode",
+        choices=("pooled", "separate"),
+        default=CLI_CONFIG.neural_training.mode,
+    )
+    train.add_argument(
+        "--min-rows", type=int, default=CLI_CONFIG.neural_training.min_rows
+    )
+    train.add_argument(
+        "--threads", type=int, default=CLI_CONFIG.neural_training.threads
+    )
+    train.add_argument("--seed", type=int, default=CLI_CONFIG.neural_training.seed)
     train.add_argument("--balance-bands", action="store_true")
     train.add_argument(
-        "--balance-players", action=argparse.BooleanOptionalAction,
+        "--balance-players",
+        action=argparse.BooleanOptionalAction,
         default=CLI_CONFIG.neural_training.balance_players,
     )
-    train.add_argument("--hidden-sizes", type=int, nargs="+", default=CLI_CONFIG.neural_training.hidden_sizes)
-    train.add_argument("--dropout", type=float, default=CLI_CONFIG.neural_training.dropout)
-    train.add_argument("--learning-rate", type=float, default=CLI_CONFIG.neural_training.learning_rate)
-    train.add_argument("--weight-decay", type=float, default=CLI_CONFIG.neural_training.weight_decay)
-    train.add_argument("--batch-size", type=int, default=CLI_CONFIG.neural_training.batch_size)
-    train.add_argument("--max-epochs", type=int, default=CLI_CONFIG.neural_training.max_epochs)
-    train.add_argument("--patience", type=int, default=CLI_CONFIG.neural_training.patience)
-    train.add_argument("--device", choices=("cpu", "cuda", "auto"), default=CLI_CONFIG.neural_training.device)
+    train.add_argument(
+        "--hidden-sizes",
+        type=int,
+        nargs="+",
+        default=CLI_CONFIG.neural_training.hidden_sizes,
+    )
+    train.add_argument(
+        "--dropout", type=float, default=CLI_CONFIG.neural_training.dropout
+    )
+    train.add_argument(
+        "--learning-rate", type=float, default=CLI_CONFIG.neural_training.learning_rate
+    )
+    train.add_argument(
+        "--weight-decay", type=float, default=CLI_CONFIG.neural_training.weight_decay
+    )
+    train.add_argument(
+        "--batch-size", type=int, default=CLI_CONFIG.neural_training.batch_size
+    )
+    train.add_argument(
+        "--max-epochs", type=int, default=CLI_CONFIG.neural_training.max_epochs
+    )
+    train.add_argument(
+        "--patience", type=int, default=CLI_CONFIG.neural_training.patience
+    )
+    train.add_argument(
+        "--device",
+        choices=("cpu", "cuda", "auto"),
+        default=CLI_CONFIG.neural_training.device,
+    )
     train.add_argument("--progress", action="store_true")
     train.add_argument("--model-version", help="Release label for the exported weights")
     train.set_defaults(handler=run_train)
@@ -407,7 +456,9 @@ def parser() -> argparse.ArgumentParser:
     export.add_argument("--source", default=str(NEURAL_TRAINING_DIRECTORY))
     export.add_argument("--output", default=str(NEURAL_ARTIFACT_DIRECTORY))
     export.add_argument("--sample-features", default=DEFAULT_FEATURES)
-    export.add_argument("--model-version", help="Release label; retains source version when omitted")
+    export.add_argument(
+        "--model-version", help="Release label; retains source version when omitted"
+    )
     export.set_defaults(handler=run_export)
 
     predict = commands.add_parser(
@@ -419,7 +470,9 @@ def parser() -> argparse.ArgumentParser:
     inputs.add_argument("--pgn")
     predict.add_argument("--analysis")
     predict.add_argument(
-        "--engine-compatibility", choices=("exact", "same-release"), default="exact",
+        "--engine-compatibility",
+        choices=("exact", "same-release"),
+        default="exact",
         help="Allow a different binary build of the same engine release with matching settings",
     )
     predict.add_argument("--output")

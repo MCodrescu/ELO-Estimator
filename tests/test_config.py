@@ -12,10 +12,8 @@ from elo_model.config import (
     NeuralTrainingConfig,
     PipelineConfig,
     StratificationConfig,
-    TrainingConfig,
 )
 from elo_model.features import FeatureConfig as ExtractionFeatureConfig
-from elo_model.training import TrainingConfig as ModelTrainingConfig
 from training_data.config import DatasetConfig as CollectionDatasetConfig
 
 
@@ -49,24 +47,34 @@ class ConfigTests(unittest.TestCase):
         """
         settings = PipelineConfig.expanded()
         original = PipelineConfig()
-        blitz = [quota for quota in settings.stratification.quotas if quota.category == "blitz"]
+        blitz = [
+            quota
+            for quota in settings.stratification.quotas
+            if quota.category == "blitz"
+        ]
         self.assertEqual(len(blitz), 10)
         self.assertEqual((blitz[0].lower, blitz[0].upper), (100, 350))
         self.assertEqual((blitz[-1].lower, blitz[-1].upper), (2350, 2601))
-        self.assertEqual(sum(quota.rows for quota in settings.stratification.quotas), 20000)
+        self.assertEqual(
+            sum(quota.rows for quota in settings.stratification.quotas), 20000
+        )
         self.assertEqual(settings.collection.search_max_players, 3000)
         self.assertEqual(settings.collection.search_band_edges[-1], 2601)
         self.assertEqual(settings.collection.search_band_quotas, (0, *([300] * 10), 0))
         self.assertEqual(settings.candidate_games, 60000)
         self.assertEqual(len(settings.collection.months), 6)
         self.assertEqual(settings.discovery_months, (max(settings.collection.months),))
-        self.assertEqual(settings.collection.archive_cache_directory, Path("data/archive_cache"))
+        self.assertEqual(
+            settings.collection.archive_cache_directory, Path("data/archive_cache")
+        )
         self.assertEqual(settings.collection.search_stagnation_expansions, 500)
         self.assertEqual(settings.discovery_seed_usernames, ("Hikaru", "GothamChess"))
-        self.assertNotEqual(settings.artifact_directory, original.artifact_directory)
+        self.assertEqual(settings.artifact_directory, original.artifact_directory)
         self.assertNotEqual(settings.analysis_directory, original.analysis_directory)
         self.assertEqual(settings.engine, original.engine)
-        self.assertEqual(settings.engine_cache_directory, original.engine_cache_directory)
+        self.assertEqual(
+            settings.engine_cache_directory, original.engine_cache_directory
+        )
 
     def test_invalid_discovery_quotas_and_coverage_limits(self):
         """Reject invalid discovery allocation before network or engine work.
@@ -104,7 +112,7 @@ class ConfigTests(unittest.TestCase):
         self.assertEqual(fast.engine.hash_reset, "game")
         self.assertEqual(fast.engine.played_move_scoring, "next-position")
         self.assertEqual(fast.features.schema_version, 2)
-        self.assertEqual(fast.artifact_directory, Path("artifacts/rating_model"))
+        self.assertEqual(fast.artifact_directory, Path("artifacts/rating_model_neural"))
 
     def test_stratification_validation_and_candidate_budget(self):
         """Validate rating/category quotas without changing engine fingerprints.
@@ -120,17 +128,25 @@ class ConfigTests(unittest.TestCase):
         disabled = replace(settings, stratification=StratificationConfig())
         self.assertEqual(disabled.candidate_games, settings.target_games)
         self.assertEqual(disabled.engine, settings.engine)
-        self.assertEqual(disabled.engine_cache_directory, settings.engine_cache_directory)
+        self.assertEqual(
+            disabled.engine_cache_directory, settings.engine_cache_directory
+        )
         invalid = [
             {"candidate_multiplier": 0},
             {"max_rows_per_player": True},
-            {"quotas": [{"lower": 1400, "upper": 1000, "category": "blitz", "rows": 5}]},
+            {
+                "quotas": [
+                    {"lower": 1400, "upper": 1000, "category": "blitz", "rows": 5}
+                ]
+            },
             {"quotas": [{"lower": 0, "category": "daily", "rows": 5}]},
             {"quotas": [{"lower": 0, "category": "blitz", "rows": 0}]},
-            {"quotas": [
-                {"lower": 0, "upper": 1400, "category": "blitz", "rows": 5},
-                {"lower": 1000, "category": "blitz", "rows": 5},
-            ]},
+            {
+                "quotas": [
+                    {"lower": 0, "upper": 1400, "category": "blitz", "rows": 5},
+                    {"lower": 1000, "category": "blitz", "rows": 5},
+                ]
+            },
         ]
         for payload in invalid:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
@@ -147,7 +163,6 @@ class ConfigTests(unittest.TestCase):
         """
         self.assertIs(AnalysisEngineConfig, EngineConfig)
         self.assertIs(ExtractionFeatureConfig, FeatureConfig)
-        self.assertIs(ModelTrainingConfig, TrainingConfig)
         self.assertIs(CollectionDatasetConfig, DatasetConfig)
 
         self.assertEqual(
@@ -180,7 +195,7 @@ class ConfigTests(unittest.TestCase):
         )
 
         self.assertEqual(settings.target_games, 1000)
-        self.assertTrue(settings.training.progress)
+        self.assertTrue(settings.neural_training.progress)
         self.assertEqual(settings.collection.max_games_per_player, 10)
         self.assertEqual(
             larger_run.engine_cache_directory, settings.engine_cache_directory

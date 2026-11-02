@@ -77,6 +77,7 @@ class ConnectionTests(unittest.TestCase):
         start = Barrier(2)
         fetch = Mock(return_value=[{"rated": True}])
         with tempfile.TemporaryDirectory() as directory:
+
             def load_archive():
                 """Start a cache request alongside another worker.
 
@@ -87,11 +88,15 @@ class ConnectionTests(unittest.TestCase):
                     Raw games from the shared archive.
                 """
                 start.wait(timeout=5)
-                return MonthlyArchiveCache(Path(directory), 60).get("Alice", 2020, 1, fetch)
+                return MonthlyArchiveCache(Path(directory), 60).get(
+                    "Alice", 2020, 1, fetch
+                )
 
             with ThreadPoolExecutor(max_workers=2) as pool:
                 futures = [pool.submit(load_archive) for _ in range(2)]
-                self.assertEqual([future.result() for future in futures], [[{"rated": True}]] * 2)
+                self.assertEqual(
+                    [future.result() for future in futures], [[{"rated": True}]] * 2
+                )
             fetch.assert_called_once()
 
     def test_archive_cache_shares_typed_discovery_and_raw_training(self):
@@ -104,17 +109,23 @@ class ConnectionTests(unittest.TestCase):
             None; cache reuse, normalized identities and rated metadata are checked.
         """
         source = {
-            "rated": True, "time_class": "blitz", "rules": "chess", "end_time": 1,
+            "rated": True,
+            "time_class": "blitz",
+            "rules": "chess",
+            "end_time": 1,
             "white": {"username": "Alice", "rating": 1200},
             "black": {"username": "Bob", "rating": 1300},
         }
         with tempfile.TemporaryDirectory() as directory:
             config = DatasetConfig(
-                months=((2020, 1),), request_delay=0,
+                months=((2020, 1),),
+                request_delay=0,
                 archive_cache_directory=Path(directory),
             )
             with patch("chessdotcom.client.requests.get") as get:
-                get.return_value = Mock(status_code=200, text=json.dumps({"games": [source]}))
+                get.return_value = Mock(
+                    status_code=200, text=json.dumps({"games": [source]})
+                )
                 typed = list(ChessComConnection(config).iter_games("Alice"))
                 raw = list(ChessComConnection(config).iter_raw_player_games(["alice"]))
             self.assertEqual(get.call_count, 1)

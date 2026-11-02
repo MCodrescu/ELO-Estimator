@@ -37,8 +37,12 @@ def sample_engine_metadata():
     """
     settings = asdict(EngineConfig("mock"))
     settings.pop("executable")
-    return {"id": {"name": "Test engine"}, "binary_sha256": "a" * 64,
-            "settings": settings, "analysis_version": ANALYSIS_VERSION}
+    return {
+        "id": {"name": "Test engine"},
+        "binary_sha256": "a" * 64,
+        "settings": settings,
+        "analysis_version": ANALYSIS_VERSION,
+    }
 
 
 def sample_analysis(game):
@@ -77,9 +81,12 @@ class FeatureTests(unittest.TestCase):
             None; chronological White-score losses and reduced schema are checked.
         """
         game = GameInput.from_pgn(PGN)
-        analysis = [replace(position, candidates=position.candidates[:1],
-                            evaluation=Score(cp=score))
-                    for position, score in zip(sample_analysis(game), (0, -200, 200, 0, 0))]
+        analysis = [
+            replace(
+                position, candidates=position.candidates[:1], evaluation=Score(cp=score)
+            )
+            for position, score in zip(sample_analysis(game), (0, -200, 200, 0, 0))
+        ]
         extractor = GameFeatureExtractor(FeatureConfig(schema_version=2))
         records = extractor.measurements(game, analysis)
         self.assertGreater(records[0]["loss"], 0)
@@ -87,8 +94,12 @@ class FeatureTests(unittest.TestCase):
         self.assertEqual(records[0]["cp_loss"], 200)
         self.assertEqual(records[1]["cp_loss"], 200)
         self.assertEqual(extractor.extract(game, analysis).shape, (2, 93))
-        self.assertFalse(any("top3" in name or "complexity" in name
-                             or "only_move" in name for name in extractor.schema.names))
+        self.assertFalse(
+            any(
+                "top3" in name or "complexity" in name or "only_move" in name
+                for name in extractor.schema.names
+            )
+        )
 
     def test_next_position_terminal_mate_and_draw(self):
         """Preserve terminal outcomes instead of fabricating candidate moves.
@@ -99,16 +110,26 @@ class FeatureTests(unittest.TestCase):
         Returns:
             None; a terminal mate scores the preceding move in White perspective.
         """
-        game = GameInput.from_pgn('1. f3 e5 2. g4 Qh4# 0-1')
+        game = GameInput.from_pgn("1. f3 e5 2. g4 Qh4# 0-1")
         analysis = sample_analysis(game)
-        analysis = [replace(position, candidates=position.candidates[:1],
-                            evaluation=Score(cp=0)) for position in analysis]
+        analysis = [
+            replace(
+                position, candidates=position.candidates[:1], evaluation=Score(cp=0)
+            )
+            for position in analysis
+        ]
         analysis[-1] = replace(analysis[-1], candidates=(), evaluation=Score(mate=-1))
-        records = GameFeatureExtractor(FeatureConfig(schema_version=2)).measurements(game, analysis)
+        records = GameFeatureExtractor(FeatureConfig(schema_version=2)).measurements(
+            game, analysis
+        )
         self.assertEqual(records[-1]["after"], 1)
         analysis[-1] = replace(analysis[-1], evaluation=Score(cp=0))
-        self.assertEqual(GameFeatureExtractor(FeatureConfig(schema_version=2)).measurements(
-            game, analysis)[-1]["after"], 0.5)
+        self.assertEqual(
+            GameFeatureExtractor(FeatureConfig(schema_version=2)).measurements(
+                game, analysis
+            )[-1]["after"],
+            0.5,
+        )
 
     def test_order_clock_and_mirroring(self):
         """Verify feature size, elapsed times, NaNs and side symmetry.

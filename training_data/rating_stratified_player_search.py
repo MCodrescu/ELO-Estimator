@@ -29,10 +29,16 @@ class RatingStratifiedPlayerSearch:
         """
         self.connection = connection
         self._edges = connection.config.search_band_edges
-        base, remainder = divmod(connection.config.search_max_players, len(self._edges))
-        self._quotas = list(connection.config.search_band_quotas) if (
-            connection.config.search_band_quotas is not None
-        ) else [base + (index < remainder) for index in range(len(self._edges))]
+        default_quota, remainder = divmod(
+            connection.config.search_max_players, len(self._edges)
+        )
+        self._quotas = (
+            list(connection.config.search_band_quotas)
+            if (connection.config.search_band_quotas is not None)
+            else [
+                default_quota + (index < remainder) for index in range(len(self._edges))
+            ]
+        )
         self._reset()
 
     def _reset(self) -> None:
@@ -130,11 +136,13 @@ class RatingStratifiedPlayerSearch:
         limit = self.connection.config.search_max_depth
         if key in self._expanded or (limit is not None and self._depths[key] >= limit):
             return
+
         band = (
             self._band(self._ratings[key][1])
             if key in self._ratings
             else len(self._edges)
         )
+
         if self._queued_band.get(key) != band:
             self._queued_band[key] = band
             self._queues[band].append(key)
@@ -154,6 +162,7 @@ class RatingStratifiedPlayerSearch:
             self._names[key] = name
             self._depths[key] = depth
             self._enqueue(key)
+
         return key
 
     def _record_rating(
@@ -178,6 +187,7 @@ class RatingStratifiedPlayerSearch:
                 source,
             )
             return
+
         previous = self._ratings.get(key)
         if previous is not None:
             if timestamp < previous[0]:
@@ -192,6 +202,7 @@ class RatingStratifiedPlayerSearch:
                 return
             if self._band(previous[1]) != self._band(rating):
                 self._buckets[self._band(previous[1])].pop(key, None)
+
         self._ratings[key] = (timestamp, rating)
         self._buckets[self._band(rating)][key] = None
         self._enqueue(key)
@@ -212,6 +223,7 @@ class RatingStratifiedPlayerSearch:
                 "Ignoring %s: not standard %s", game.url, config.search_time_class
             )
             return
+
         players = (game.white, game.black)
         if any(
             player is None or not player.username or not player.username.strip()
@@ -221,6 +233,7 @@ class RatingStratifiedPlayerSearch:
                 "Skipping player links in %s: missing participant username", game.url
             )
             return
+
         names = [
             player.username.strip()
             for player in players
@@ -231,6 +244,7 @@ class RatingStratifiedPlayerSearch:
                 "Skipping %s: archive owner %s is not a participant", game.url, owner
             )
             return
+
         depth = self._depths[owner.casefold()] + 1
         keys = [self._register(name, depth) for name in names]
         timestamp = game.end_time
@@ -243,6 +257,7 @@ class RatingStratifiedPlayerSearch:
                 "Cannot assign ratings from %s: missing/invalid end_time", game.url
             )
             return
+
         for key, player in zip(keys, players):
             if player is not None:
                 self._record_rating(key, player.rating, timestamp, game.url or owner)
@@ -275,11 +290,13 @@ class RatingStratifiedPlayerSearch:
                 return (1, 0, band)
             if deficits[band]:
                 return (0, -deficits[band], band)
+
             distance = min((abs(band - target) for target in missing), default=0)
             return (2, distance, band)
 
         batch: list[str] = []
         remaining = self.connection.config.search_max_expansions - self.expanded_count
+
         for band in sorted(range(len(self._queues)), key=priority):
             while self._queues[band] and len(batch) < min(
                 remaining, self.connection.config.max_workers
@@ -287,9 +304,11 @@ class RatingStratifiedPlayerSearch:
                 key = self._queues[band].popleft()
                 if self._queued_band.get(key) != band or key in self._expanded:
                     continue
+
                 del self._queued_band[key]
                 self._expanded.add(key)
                 batch.append(self._names[key])
+
         return batch
 
     def _initialize_seeds(
@@ -305,10 +324,13 @@ class RatingStratifiedPlayerSearch:
             Trimmed primary seed for progress logging.
         """
         seed = (
-            self.connection.config.seed_username if seed_username is None else seed_username
+            self.connection.config.seed_username
+            if seed_username is None
+            else seed_username
         ).strip()
         if not seed:
             raise ValueError("seed_username must not be empty")
+
         self._reset()
         self._register(seed, 0)
         for additional_seed in seed_usernames or []:
@@ -330,8 +352,11 @@ class RatingStratifiedPlayerSearch:
         if retained > self._best_retained:
             self._best_retained = retained
             self._last_improvement = self.expanded_count
+
         limit = self.connection.config.search_stagnation_expansions
-        return limit is not None and self.expanded_count - self._last_improvement >= limit
+        return (
+            limit is not None and self.expanded_count - self._last_improvement >= limit
+        )
 
     def _accepted_players(self) -> list[str]:
         """Collect within-quota usernames and report remaining band shortages.
@@ -351,12 +376,17 @@ class RatingStratifiedPlayerSearch:
             if len(bucket) < quota:
                 logger.warning(
                     "Unfilled rating band %s: %d/%d usernames",
-                    self._label(band), len(bucket), quota,
+                    self._label(band),
+                    len(bucket),
+                    quota,
                 )
         return result
 
     def search(
-        self, seed_username: str | None = None, *, seed_usernames: list[str] | None = None,
+        self,
+        seed_username: str | None = None,
+        *,
+        seed_usernames: list[str] | None = None,
         progress: bool = False,
     ) -> list[str]:
         """Return a partial within-quota sample if the expansion budget is exhausted.
@@ -384,11 +414,14 @@ class RatingStratifiedPlayerSearch:
         )
         reason = "band quotas filled"
         with DiscoveryProgress(
-            config.search_time_class, self.band_quotas,
-            config.search_max_expansions * len(config.months), progress,
+            config.search_time_class,
+            self.band_quotas,
+            config.search_max_expansions * len(config.months),
+            progress,
         ) as display:
             while any(
-                len(bucket) < quota for bucket, quota in zip(self._buckets, self._quotas)
+                len(bucket) < quota
+                for bucket, quota in zip(self._buckets, self._quotas)
             ):
                 batch = self._next_batch()
                 if not batch:
@@ -398,6 +431,7 @@ class RatingStratifiedPlayerSearch:
                         else "frontier exhausted or depth limit reached"
                     )
                     break
+
                 logger.info(
                     "Expanding %d players (%d/%d budget): %s",
                     len(batch),
@@ -405,14 +439,17 @@ class RatingStratifiedPlayerSearch:
                     config.search_max_expansions,
                     batch,
                 )
+
                 for owner, games in self.connection.iter_player_games(batch):
                     for game in games:
                         self._observe(owner, game)
                     display.update(owner, self.band_counts)
+
                 logger.info("Rating-band progress: %s", self.band_counts)
                 if self._stalled():
                     reason = "no rating-quota improvement within stagnation budget"
                     break
+
             display.finish(reason)
 
         self.stop_reason = reason

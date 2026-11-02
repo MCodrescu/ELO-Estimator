@@ -26,18 +26,42 @@ class AnalysisTests(unittest.TestCase):
             None; changing any behavior-affecting field produces a different key.
         """
         game = GameInput.from_pgn(PGN)
-        config = EngineConfig("mock", depth=None, multipv=1, time_seconds=.1,
-                              hash_reset="game", played_move_scoring="next-position")
+        config = EngineConfig(
+            "mock",
+            depth=None,
+            multipv=1,
+            time_seconds=0.1,
+            hash_reset="game",
+            played_move_scoring="next-position",
+        )
         settings = asdict(config)
-        metadata = {"settings": settings, "binary_sha256": "a" * 64, "analysis_version": 2}
+        metadata = {
+            "settings": settings,
+            "binary_sha256": "a" * 64,
+            "analysis_version": 2,
+        }
         key = AnalysisCache.key(game, metadata)
-        for field, value in {"depth": 4, "multipv": 3, "threads": 2, "hash_mb": 128,
-                             "time_seconds": .2, "nodes": 1000, "hash_reset": "position",
-                             "played_move_scoring": "root-restricted"}.items():
+        for field, value in {
+            "depth": 4,
+            "multipv": 3,
+            "threads": 2,
+            "hash_mb": 128,
+            "time_seconds": 0.2,
+            "nodes": 1000,
+            "hash_reset": "position",
+            "played_move_scoring": "root-restricted",
+        }.items():
             with self.subTest(field=field):
-                self.assertNotEqual(key, AnalysisCache.key(game, {
-                    **metadata, "settings": {**settings, field: value},
-                }))
+                self.assertNotEqual(
+                    key,
+                    AnalysisCache.key(
+                        game,
+                        {
+                            **metadata,
+                            "settings": {**settings, field: value},
+                        },
+                    ),
+                )
 
     def test_repetition_history_and_terminal_outcomes_need_no_search(self):
         """Recognize automatic fivefold draws using replay history, not FEN alone.
@@ -48,7 +72,7 @@ class AnalysisTests(unittest.TestCase):
         Returns:
             None; the terminal repeated board and mate need no engine search.
         """
-        pgn = '1. Nf3 Nf6 2. Ng1 Ng8 3. Nf3 Nf6 4. Ng1 Ng8 5. Nf3 Nf6 6. Ng1 Ng8 7. Nf3 Nf6 8. Ng1 Ng8 *'
+        pgn = "1. Nf3 Nf6 2. Ng1 Ng8 3. Nf3 Nf6 4. Ng1 Ng8 5. Nf3 Nf6 6. Ng1 Ng8 7. Nf3 Nf6 8. Ng1 Ng8 *"
         game = GameInput.from_pgn(pgn)
         board = game.boards()[-1]
         self.assertEqual(len(board.move_stack), 16)
@@ -59,7 +83,7 @@ class AnalysisTests(unittest.TestCase):
             result = analyzer._position(board)
             self.assertEqual(result.evaluation.cp, 0)
             self.assertEqual(result.candidates, ())
-            mate = GameInput.from_pgn('1. f3 e5 2. g4 Qh4# 0-1').boards()[-1]
+            mate = GameInput.from_pgn("1. f3 e5 2. g4 Qh4# 0-1").boards()[-1]
             self.assertEqual(analyzer._position(mate).evaluation.mate, -1)
             analyzer.engine.analyse.assert_not_called()
             analyzer.engine.analysis.assert_not_called()
@@ -75,19 +99,33 @@ class AnalysisTests(unittest.TestCase):
         """
         board = chess.Board()
         moves = list(board.legal_moves)
-        exact = [{"depth": 4, "multipv": rank, "pv": [move],
-                  "score": chess.engine.PovScore(chess.engine.Cp(rank), chess.WHITE)}
-                 for rank, move in enumerate(moves[:1], 1)]
+        exact = [
+            {
+                "depth": 4,
+                "multipv": rank,
+                "pv": [move],
+                "score": chess.engine.PovScore(chess.engine.Cp(rank), chess.WHITE),
+            }
+            for rank, move in enumerate(moves[:1], 1)
+        ]
         bound = {**exact[0], "depth": 5, "lowerbound": True}
         with tempfile.TemporaryDirectory() as directory:
-            analyzer = StockfishAnalyzer(EngineConfig(
-                "mock", depth=None, time_seconds=.1, played_move_scoring="next-position",
-            ), AnalysisCache(directory))
+            analyzer = StockfishAnalyzer(
+                EngineConfig(
+                    "mock",
+                    depth=None,
+                    time_seconds=0.1,
+                    played_move_scoring="next-position",
+                ),
+                AnalysisCache(directory),
+            )
             analyzer.engine = Mock()
             analyzer.engine.analysis.return_value = nullcontext(iter([*exact, bound]))
-            self.assertEqual(analyzer._bounded_infos(board, chess.engine.Limit(time=.1)), exact)
+            self.assertEqual(
+                analyzer._bounded_infos(board, chess.engine.Limit(time=0.1)), exact
+            )
             analyzer.engine.analysis.return_value = nullcontext(iter([bound]))
-            limit = chess.engine.Limit(time=.1)
+            limit = chess.engine.Limit(time=0.1)
             with self.assertRaisesRegex(ValueError, "no complete exact"):
                 analyzer._bounded_infos(board, limit)
 
@@ -124,10 +162,19 @@ class AnalysisTests(unittest.TestCase):
                 self.assertIsNone(limit.depth)
                 self.assertEqual(multipv, 1)
                 self.assertEqual(len(board.move_stack), engine.analysis.call_count - 1)
-                return nullcontext(iter([{
-                    "pv": [next(iter(board.legal_moves))], "depth": 4,
-                    "score": chess.engine.PovScore(chess.engine.Cp(0), chess.WHITE),
-                }]))
+                return nullcontext(
+                    iter(
+                        [
+                            {
+                                "pv": [next(iter(board.legal_moves))],
+                                "depth": 4,
+                                "score": chess.engine.PovScore(
+                                    chess.engine.Cp(0), chess.WHITE
+                                ),
+                            }
+                        ]
+                    )
+                )
 
             engine.analysis.side_effect = analyse
             key, positions = analyzer.analyze(game)
@@ -200,7 +247,8 @@ class AnalysisTests(unittest.TestCase):
             self.assertEqual(cache.load(key), sample_analysis(game))
             self.assertNotEqual(key, cache.key(game, {"time_seconds": 0.2}))
             self.assertNotEqual(
-                key, cache.key(replace(game, moves=game.moves[:-1]), {"time_seconds": 0.1})
+                key,
+                cache.key(replace(game, moves=game.moves[:-1]), {"time_seconds": 0.1}),
             )
 
 

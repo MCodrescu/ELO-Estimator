@@ -70,9 +70,12 @@ class Score:
         """
         if not math.isfinite(scale) or scale <= 0:
             raise ValueError("Probability scale must be finite and positive")
+
         if self.mate is not None:
             return float(self.mate > 0)
-        return 1 / (1 + math.exp(-max(-700, min(700, self.cp / scale))))
+
+        bounded_log_odds = max(-700, min(700, self.cp / scale))
+        return 1 / (1 + math.exp(-bounded_log_odds))
 
 
 @dataclass(frozen=True)
@@ -121,19 +124,24 @@ class GameInput:
             raise ValueError("Missing or invalid PGN")
         if chess.pgn.read_game(stream) is not None:
             raise ValueError("Expected exactly one PGN game")
+
         board = game.board()
         if board.uci_variant != "chess" or board.chess960 or not board.is_valid():
             raise ValueError("Expected a legal standard-chess starting position")
-        moves, clocks = [], []
+        moves = []
+        clocks = []
+
         for node in game.mainline():
             if node.move not in board.legal_moves:
                 raise ValueError("Illegal PGN move")
+
             moves.append(node.move.uci())
             clock = node.clock()
             if clock is not None and (not math.isfinite(clock) or clock < 0):
                 raise ValueError("Invalid clock annotation")
             clocks.append(clock)
             board.push(node.move)
+
         return cls(game.board().fen(), tuple(moves), tuple(clocks), dict(game.headers))
 
     def boards(self) -> list[chess.Board]:
@@ -147,11 +155,14 @@ class GameInput:
         """
         if len(self.clocks) != len(self.moves):
             raise ValueError("Clocks and moves must align")
+
         board = chess.Board(self.initial_fen)
         result = [board.copy()]
+
         for text in self.moves:
             board.push_uci(text)
             result.append(board.copy())
+
         return result
 
     def time_control(self) -> tuple[float, float, str | None]:
@@ -166,10 +177,13 @@ class GameInput:
         match = re.fullmatch(r"(\d+)(?:\+(\d+))?", self.headers.get("TimeControl", ""))
         if not match or int(match[1]) <= 0:
             return math.nan, math.nan, None
-        base, increment = float(match[1]), float(match[2] or 0)
+
+        base = float(match[1])
+        increment = float(match[2] or 0)
         duration = base + TIME_CONTROL_INCREMENT_MOVES * increment
         categories = zip(TIME_CATEGORY_LIMITS, TIME_CATEGORIES)
         category = next(name for limit, name in categories if duration < limit)
+
         return base, increment, category
 
     def termination(self) -> str:

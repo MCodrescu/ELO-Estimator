@@ -67,9 +67,14 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
             None; stable display identity, throttling and final content are checked.
         """
         with (
-            patch("training_data.discovery_progress.get_ipython", return_value=SimpleNamespace(kernel=object())),
+            patch(
+                "training_data.discovery_progress.get_ipython",
+                return_value=SimpleNamespace(kernel=object()),
+            ),
             patch("training_data.discovery_progress.display") as render,
-            patch("training_data.discovery_progress.monotonic", return_value=0) as clock,
+            patch(
+                "training_data.discovery_progress.monotonic", return_value=0
+            ) as clock,
         ):
             with DiscoveryProgress("blitz", {"100-349": 3}, 10, True) as progress:
                 render.assert_called_once()
@@ -102,8 +107,12 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
             None; remaining quotas, completion counts and estimated times are checked.
         """
         with (
-            patch("training_data.discovery_progress.monotonic", return_value=0) as clock,
-            DiscoveryProgress("blitz", {"bridge": 0, "100-349": 3, "350-599": 3}, 10, False) as display,
+            patch(
+                "training_data.discovery_progress.monotonic", return_value=0
+            ) as clock,
+            DiscoveryProgress(
+                "blitz", {"bridge": 0, "100-349": 3, "350-599": 3}, 10, False
+            ) as display,
         ):
             self.assertEqual(len(display.bands), 2)
             self.assertIn("remaining=6", display.summary.postfix)
@@ -143,7 +152,9 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
             },
             search_stagnation_expansions=2,
         )
-        with self.assertLogs("training_data.rating_stratified_player_search", level="INFO"):
+        with self.assertLogs(
+            "training_data.rating_stratified_player_search", level="INFO"
+        ):
             result = search.search()
         self.assertEqual(len(result), 1)
         self.assertEqual(search.expanded_count, 3)
@@ -159,25 +170,43 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
             None; progress totals, final counts and bar closure are asserted.
         """
         search, connection = self.make_search(
-            {}, search_max_expansions=1, months=((2026, 9), (2026, 10)),
+            {},
+            search_max_expansions=1,
+            months=((2026, 9), (2026, 10)),
         )
         connection.iter_player_games.side_effect = None
         connection.iter_player_games.return_value = [
-            ("Seed", [game("Seed", 1700, f"Player{band}", band * 250) for band in range(6)]),
-            ("Seed", [game("Seed", 1700, f"Player{band}", band * 250) for band in range(6, 11)]),
+            (
+                "Seed",
+                [game("Seed", 1700, f"Player{band}", band * 250) for band in range(6)],
+            ),
+            (
+                "Seed",
+                [
+                    game("Seed", 1700, f"Player{band}", band * 250)
+                    for band in range(6, 11)
+                ],
+            ),
         ]
         archive_bar = tqdm(total=2, file=io.StringIO())
         player_bar = tqdm(total=11, file=io.StringIO())
         band_bars = [tqdm(total=1, file=io.StringIO()) for _ in range(11)]
         with (
-            patch("training_data.discovery_progress.tqdm", side_effect=[player_bar, archive_bar, *band_bars]) as bars,
-            self.assertLogs("training_data.rating_stratified_player_search", level="INFO"),
+            patch(
+                "training_data.discovery_progress.tqdm",
+                side_effect=[player_bar, archive_bar, *band_bars],
+            ) as bars,
+            self.assertLogs(
+                "training_data.rating_stratified_player_search", level="INFO"
+            ),
         ):
             result = search.search(progress=True)
         self.assertEqual(len(result), 11)
         self.assertEqual(archive_bar.n, 2)
         self.assertEqual(player_bar.n, 11)
-        self.assertEqual([call.kwargs["total"] for call in bars.call_args_list], [11, 2, *([1] * 11)])
+        self.assertEqual(
+            [call.kwargs["total"] for call in bars.call_args_list], [11, 2, *([1] * 11)]
+        )
         self.assertTrue(all(not call.kwargs["disable"] for call in bars.call_args_list))
         self.assertTrue(archive_bar.disable)
         self.assertTrue(player_bar.disable)
@@ -212,7 +241,10 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
             )
             with (
                 patch("training_data.preparation.ChessComConnection") as connection,
-                patch("training_data.preparation.RatingStratifiedPlayerSearch", return_value=search),
+                patch(
+                    "training_data.preparation.RatingStratifiedPlayerSearch",
+                    return_value=search,
+                ),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 first = PlayerPoolBuilder(settings).build()
@@ -221,13 +253,18 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
                 self.assertEqual(search.search.call_count, 3)
                 self.assertTrue(search.search.call_args.kwargs["progress"])
                 self.assertEqual(
-                    {call.args[0].search_time_class for call in connection.call_args_list},
+                    {
+                        call.args[0].search_time_class
+                        for call in connection.call_args_list
+                    },
                     {"blitz", "rapid", "bullet"},
                 )
-                self.assertTrue(all(
-                    call.args[0].months == settings.discovery_months
-                    for call in connection.call_args_list
-                ))
+                self.assertTrue(
+                    all(
+                        call.args[0].months == settings.discovery_months
+                        for call in connection.call_args_list
+                    )
+                )
                 self.assertEqual(len(settings.discovery_months), 1)
                 self.assertEqual(len(settings.collection.months), 6)
                 changed = replace(settings, discovery_seed_usernames=("Elite",))
@@ -255,7 +292,9 @@ class RatingStratifiedPlayerSearchTests(unittest.TestCase):
             search_band_quotas=(0, 1, 0, 1, 0),
             search_max_players=2,
         )
-        with self.assertLogs("training_data.rating_stratified_player_search", level="INFO"):
+        with self.assertLogs(
+            "training_data.rating_stratified_player_search", level="INFO"
+        ):
             result = search.search(seed_usernames=["Elite", "seed"])
         self.assertEqual(set(result), {"Low", "High"})
         self.assertEqual(search.band_counts, search.band_quotas)

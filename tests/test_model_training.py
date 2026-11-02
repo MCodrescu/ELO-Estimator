@@ -15,7 +15,6 @@ from elo_model.evaluation import evaluate, rating_bands, sample_weights
 from elo_model.feature_schema import FEATURE_NAMES
 from elo_model.neural_training import TorchModelTrainer
 from elo_model.predictor import RatingPredictor, export_bundle
-from elo_model.training import ModelTrainer, TrainingConfig
 from tests.test_features import sample_engine_metadata
 
 
@@ -53,8 +52,12 @@ class TrainingTests(unittest.TestCase):
         """
         frame = synthetic_frame()
         config = NeuralTrainingConfig(
-            mode="separate", hidden_sizes=(8,), max_epochs=2, min_rows=10,
-            batch_size=32, progress=False,
+            mode="separate",
+            hidden_sizes=(8,),
+            max_epochs=2,
+            min_rows=10,
+            batch_size=32,
+            progress=False,
         )
         previous_threads = torch.get_num_threads()
         previous_random = torch.random.get_rng_state().clone()
@@ -66,20 +69,34 @@ class TrainingTests(unittest.TestCase):
         repeated = TorchModelTrainer(config).fit(frame)
         shifted = TorchModelTrainer(config).fit(changed)
         for category, model in result.models.items():
-            self.assertEqual(model.preprocessing, shifted.models[category].preprocessing)
+            self.assertEqual(
+                model.preprocessing, shifted.models[category].preprocessing
+            )
             rows = frame.loc[frame["category"] == category, list(FEATURE_NAMES)]
-            np.testing.assert_array_equal(model.predict(rows), repeated.models[category].predict(rows))
+            np.testing.assert_array_equal(
+                model.predict(rows), repeated.models[category].predict(rows)
+            )
         result.metadata["engine"] = sample_engine_metadata()
         with tempfile.TemporaryDirectory() as directory:
-            export_bundle(result.models, directory, frame.iloc[-10:], result.metadata, result.report)
+            export_bundle(
+                result.models,
+                directory,
+                frame.iloc[-10:],
+                result.metadata,
+                result.report,
+            )
             predictor = RatingPredictor(directory)
             sample = frame.iloc[-10:]
-            actual = predictor.predict(sample.loc[:, list(FEATURE_NAMES)], sample["category"].tolist())
+            actual = predictor.predict(
+                sample.loc[:, list(FEATURE_NAMES)], sample["category"].tolist()
+            )
             self.assertTrue(np.isfinite(actual).all())
             with self.assertRaisesRegex(ValueError, "category"):
                 predictor.predict(sample.loc[:, list(FEATURE_NAMES)])
             with self.assertRaisesRegex(ValueError, "category"):
-                predictor.predict(sample.loc[:, list(FEATURE_NAMES)], ["bullet"] * len(sample))
+                predictor.predict(
+                    sample.loc[:, list(FEATURE_NAMES)], ["bullet"] * len(sample)
+                )
 
     def test_neural_train_and_export_roundtrip(self):
         """Verify neural preprocessing, validation selection and portable predictions.
@@ -92,8 +109,12 @@ class TrainingTests(unittest.TestCase):
         """
         frame = synthetic_frame()
         config = NeuralTrainingConfig(
-            hidden_sizes=(16, 8), max_epochs=3, patience=2, min_rows=10,
-            batch_size=32, progress=False,
+            hidden_sizes=(16, 8),
+            max_epochs=3,
+            patience=2,
+            min_rows=10,
+            batch_size=32,
+            progress=False,
         )
         result = TorchModelTrainer(config).fit(frame)
         model = result.models["pooled"]
@@ -102,14 +123,19 @@ class TrainingTests(unittest.TestCase):
         missing_index = list(FEATURE_NAMES).index("self_endgame_loss_mean")
         self.assertEqual(model.preprocessing.medians[missing_index], 0)
         report = result.report["pooled"]
-        self.assertEqual(report["best_validation_mae"], min(
-            epoch["validation_mae"] for epoch in report["history"]
-        ))
+        self.assertEqual(
+            report["best_validation_mae"],
+            min(epoch["validation_mae"] for epoch in report["history"]),
+        )
         self.assertEqual(report["partitions"]["test"]["pytorch"]["overall"]["rows"], 40)
         result.metadata["engine"] = sample_engine_metadata()
         with tempfile.TemporaryDirectory() as directory:
             verification = export_bundle(
-                result.models, directory, frame.iloc[-10:], result.metadata, result.report,
+                result.models,
+                directory,
+                frame.iloc[-10:],
+                result.metadata,
+                result.report,
             )
             self.assertLessEqual(verification["max_absolute_difference"], 1e-3)
             predictor = RatingPredictor(directory)
@@ -117,7 +143,10 @@ class TrainingTests(unittest.TestCase):
             self.assertEqual(predictor.manifest["models"], {"pooled": "pooled.pt"})
             actual = predictor.predict(frame.loc[:4, list(FEATURE_NAMES)])
             np.testing.assert_allclose(
-                actual, model.predict(frame.loc[:4, list(FEATURE_NAMES)]), rtol=1e-6, atol=1e-4,
+                actual,
+                model.predict(frame.loc[:4, list(FEATURE_NAMES)]),
+                rtol=1e-6,
+                atol=1e-4,
             )
 
     def test_expanded_report_boundaries_bias_and_empty_categories(self):
@@ -129,15 +158,26 @@ class TrainingTests(unittest.TestCase):
         Returns:
             None; expanded intervals, counts and signed bias are asserted.
         """
-        frame = pd.DataFrame({
-            "rating": [99, 100, 349, 350, 2349, 2350, 2600, 2601],
-            "target_username": [f"player{index}" for index in range(8)],
-            "category": ["blitz"] * 8,
-        })
-        self.assertEqual(list(rating_bands(frame["rating"], expanded=True)), [
-            "<100", "100-350", "100-350", "350-600", "2100-2350",
-            "2350-2600", "2350-2600", ">2600",
-        ])
+        frame = pd.DataFrame(
+            {
+                "rating": [99, 100, 349, 350, 2349, 2350, 2600, 2601],
+                "target_username": [f"player{index}" for index in range(8)],
+                "category": ["blitz"] * 8,
+            }
+        )
+        self.assertEqual(
+            list(rating_bands(frame["rating"], expanded=True)),
+            [
+                "<100",
+                "100-350",
+                "100-350",
+                "350-600",
+                "2100-2350",
+                "2350-2600",
+                "2350-2600",
+                ">2600",
+            ],
+        )
         report = evaluate(frame, frame["rating"].to_numpy() + 25)
         self.assertEqual(report["overall"]["signed_bias"], 25)
         self.assertEqual(report["by_expanded_rating_band"]["2350-2600"]["rows"], 2)
@@ -158,26 +198,58 @@ class TrainingTests(unittest.TestCase):
         """
         features = FeatureConfig(schema_version=2)
         frame = synthetic_frame()
-        result = ModelTrainer(TrainingConfig(trials=0, max_trees=5), features).fit(frame)
-        engine = asdict(EngineConfig("mock", depth=None, multipv=1, time_seconds=.1,
-                                    played_move_scoring="next-position"))
+        result = TorchModelTrainer(
+            NeuralTrainingConfig(
+                hidden_sizes=(8,), max_epochs=2, min_rows=10, progress=False
+            ),
+            features,
+        ).fit(frame)
+        engine = asdict(
+            EngineConfig(
+                "mock",
+                depth=None,
+                multipv=1,
+                time_seconds=0.1,
+                played_move_scoring="next-position",
+            )
+        )
         engine.pop("executable")
-        result.metadata["engine"] = {"settings": engine, "analysis_version": 2,
-                                     "id": {"name": "mock"}, "binary_sha256": "a" * 64}
+        result.metadata["engine"] = {
+            "settings": engine,
+            "analysis_version": 2,
+            "id": {"name": "mock"},
+            "binary_sha256": "a" * 64,
+        }
         with tempfile.TemporaryDirectory() as directory:
-            export_bundle(result.models, directory, frame.iloc[-10:], result.metadata,
-                          result.report, features, model_version="test-fast-v2")
+            export_bundle(
+                result.models,
+                directory,
+                frame.iloc[-10:],
+                result.metadata,
+                result.report,
+                features,
+                model_version="test-fast-v2",
+            )
             predictor = RatingPredictor(directory)
             self.assertEqual(len(predictor.schema.names), 93)
-            self.assertTrue(np.isfinite(predictor.predict(frame.loc[:2, list(predictor.schema.names)])).all())
+            self.assertTrue(
+                np.isfinite(
+                    predictor.predict(frame.loc[:2, list(predictor.schema.names)])
+                ).all()
+            )
             with self.assertRaisesRegex(ValueError, "metadata"):
                 predictor.validate_engine_metadata({"settings": {"depth": 12}})
-            changed = {**result.metadata, "engine": {**result.metadata["engine"], "binary_sha256": "b" * 64}}
+            changed = {
+                **result.metadata,
+                "engine": {**result.metadata["engine"], "binary_sha256": "b" * 64},
+            }
             with self.assertRaisesRegex(ValueError, "separate"):
-                export_bundle(result.models, directory, frame.iloc[-10:], changed, {}, features)
+                export_bundle(
+                    result.models, directory, frame.iloc[-10:], changed, {}, features
+                )
 
-    def test_train_tune_and_export_roundtrip(self):
-        """Run one tuning trial and verify native reload/schema protection.
+    def test_export_rejects_reordered_feature_names(self):
+        """Verify checkpoint reload parity and reject reordered feature schemas.
 
         Args:
             None.
@@ -186,12 +258,13 @@ class TrainingTests(unittest.TestCase):
             None; finite predictions, parity and schema rejection are asserted.
         """
         frame = synthetic_frame()
-        result = ModelTrainer(
-            TrainingConfig(trials=1, max_trees=30, early_stopping_rounds=5)
+        result = TorchModelTrainer(
+            NeuralTrainingConfig(
+                hidden_sizes=(8,), max_epochs=2, min_rows=10, progress=False
+            )
         ).fit(frame)
         result.metadata["engine"] = sample_engine_metadata()
-        self.assertIn("ridge", result.report["pooled"]["partitions"]["test"])
-        self.assertEqual(len(result.report["pooled"]["trials"]), 1)
+        self.assertIn("train_median", result.report["pooled"]["partitions"]["test"])
         with tempfile.TemporaryDirectory() as directory:
             verification = export_bundle(
                 result.models,
@@ -200,7 +273,7 @@ class TrainingTests(unittest.TestCase):
                 result.metadata,
                 result.report,
             )
-            self.assertLessEqual(verification["max_absolute_difference"], 1e-9)
+            self.assertLessEqual(verification["max_absolute_difference"], 1e-3)
             predictor = RatingPredictor(directory)
             actual = predictor.predict(frame.loc[:4, list(FEATURE_NAMES)])
             self.assertTrue(np.isfinite(actual).all())
@@ -224,15 +297,24 @@ class TrainingTests(unittest.TestCase):
         train = frame.loc[frame["partition"] == "train"]
         weights = sample_weights(train, True, True)
         self.assertTrue(np.isfinite(weights).all())
-        result = ModelTrainer(
-            TrainingConfig(mode="separate", trials=0, max_trees=5)
+        result = TorchModelTrainer(
+            NeuralTrainingConfig(
+                mode="separate",
+                hidden_sizes=(8,),
+                max_epochs=2,
+                min_rows=10,
+                balance_bands=True,
+                balance_players=True,
+                progress=False,
+            )
         ).fit(frame)
         result.metadata["engine"] = sample_engine_metadata()
         self.assertEqual(set(result.models), {"blitz", "rapid"})
         self.assertEqual(
-            result.report["combined"]["partitions"]["test"]["lightgbm"]["overall"][
-                "rows"
-            ],
+            sum(
+                report["partitions"]["test"]["pytorch"]["overall"]["rows"]
+                for report in result.report.values()
+            ),
             40,
         )
         with tempfile.TemporaryDirectory() as directory:

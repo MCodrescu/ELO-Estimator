@@ -1,4 +1,4 @@
-"""Public inference uses real exported trees and isolated engine adapters."""
+"""Public inference uses real neural checkpoints and isolated engine adapters."""
 
 import contextlib
 import io
@@ -17,13 +17,13 @@ from elo_model.config import (
     EngineConfig,
     FeatureConfig,
     InferenceConfig,
-    TrainingConfig,
+    NeuralTrainingConfig,
 )
 from elo_model.game import GameInput, Score
 from elo_model.inference import RatingEstimator
+from elo_model.neural_training import TorchModelTrainer
 from elo_model.predictor import export_bundle
 from elo_model.storage import write_json
-from elo_model.training import ModelTrainer
 from tests.test_features import PGN, sample_analysis
 from tests.test_model_training import synthetic_frame
 
@@ -40,31 +40,70 @@ class InferenceTests(unittest.TestCase):
         """
         features = FeatureConfig(schema_version=2)
         frame = synthetic_frame()
-        result = ModelTrainer(TrainingConfig(trials=0, max_trees=5), features).fit(frame)
-        settings = asdict(EngineConfig("mock", depth=None, multipv=1, time_seconds=.1,
-                                      hash_reset="game", played_move_scoring="next-position"))
+        result = TorchModelTrainer(
+            NeuralTrainingConfig(hidden_sizes=(8,), max_epochs=2, progress=False),
+            features,
+        ).fit(frame)
+        settings = asdict(
+            EngineConfig(
+                "mock",
+                depth=None,
+                multipv=1,
+                time_seconds=0.1,
+                hash_reset="game",
+                played_move_scoring="next-position",
+            )
+        )
         settings.pop("executable")
-        metadata = {"settings": settings, "analysis_version": 2,
-                    "id": {"name": "Test engine"}, "binary_sha256": "a" * 64}
+        metadata = {
+            "settings": settings,
+            "analysis_version": 2,
+            "id": {"name": "Test engine"},
+            "binary_sha256": "a" * 64,
+        }
         result.metadata["engine"] = metadata
         game = GameInput.from_pgn(PGN)
-        analysis = [replace(position, candidates=position.candidates[:1], evaluation=Score(cp=0))
-                    for position in sample_analysis(game)]
+        analysis = [
+            replace(
+                position, candidates=position.candidates[:1], evaluation=Score(cp=0)
+            )
+            for position in sample_analysis(game)
+        ]
         with tempfile.TemporaryDirectory() as directory:
-            export_bundle(result.models, directory, frame.iloc[-10:], result.metadata,
-                          result.report, features)
+            export_bundle(
+                result.models,
+                directory,
+                frame.iloc[-10:],
+                result.metadata,
+                result.report,
+                features,
+            )
             estimator = RatingEstimator(InferenceConfig(model_directory=directory))
             with patch("elo_model.inference.StockfishAnalyzer") as engine:
-                estimate = estimator.predict_pgn(PGN, analysis=analysis, engine_metadata=metadata)
+                estimate = estimator.predict_pgn(
+                    PGN, analysis=analysis, engine_metadata=metadata
+                )
                 engine.assert_not_called()
             self.assertIsNone(estimate.cache_hit)
             self.assertEqual(estimate.engine_metadata, metadata)
-            for field, value in {"time_seconds": .2, "nodes": 100, "depth": 12,
-                                 "hash_reset": "position", "played_move_scoring": "root-restricted",
-                                 "multipv": 3, "threads": 2, "hash_mb": 128}.items():
+            for field, value in {
+                "time_seconds": 0.2,
+                "nodes": 100,
+                "depth": 12,
+                "hash_reset": "position",
+                "played_move_scoring": "root-restricted",
+                "multipv": 3,
+                "threads": 2,
+                "hash_mb": 128,
+            }.items():
                 changed = {**metadata, "settings": {**settings, field: value}}
-                with self.subTest(field=field), self.assertRaisesRegex(ValueError, "metadata"):
-                    estimator.predict_pgn(PGN, analysis=analysis, engine_metadata=changed)
+                with (
+                    self.subTest(field=field),
+                    self.assertRaisesRegex(ValueError, "metadata"),
+                ):
+                    estimator.predict_pgn(
+                        PGN, analysis=analysis, engine_metadata=changed
+                    )
 
     def test_cli_same_release_accepts_cross_build_analysis(self):
         """Forward the explicit CLI policy without changing engine metadata.
@@ -79,23 +118,43 @@ class InferenceTests(unittest.TestCase):
         analysis = sample_analysis(GameInput.from_pgn(PGN))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            pgn_path, analysis_path, output = root / "game.pgn", root / "analysis.json", root / "prediction.json"
+            pgn_path, analysis_path, output = (
+                root / "game.pgn",
+                root / "analysis.json",
+                root / "prediction.json",
+            )
             pgn_path.write_text(PGN, encoding="utf-8")
-            write_json(analysis_path, {
-                "engine": runtime, "positions": [asdict(position) for position in analysis],
-            })
+            write_json(
+                analysis_path,
+                {
+                    "engine": runtime,
+                    "positions": [asdict(position) for position in analysis],
+                },
+            )
             with (
-                patch("sys.argv", [
-                    "elo_model", "predict", "--model", str(self.directory),
-                    "--pgn", str(pgn_path), "--analysis", str(analysis_path),
-                    "--output", str(output), "--engine-compatibility", "same-release",
-                ]),
+                patch(
+                    "sys.argv",
+                    [
+                        "elo_model",
+                        "predict",
+                        "--model",
+                        str(self.directory),
+                        "--pgn",
+                        str(pgn_path),
+                        "--analysis",
+                        str(analysis_path),
+                        "--output",
+                        str(output),
+                        "--engine-compatibility",
+                        "same-release",
+                    ],
+                ),
                 contextlib.redirect_stdout(io.StringIO()),
             ):
                 main()
-            expected = RatingEstimator(InferenceConfig(model_directory=self.directory)).predictor.predict_game(
-                GameInput.from_pgn(PGN), analysis, self.metadata
-            )
+            expected = RatingEstimator(
+                InferenceConfig(model_directory=self.directory)
+            ).predictor.predict_game(GameInput.from_pgn(PGN), analysis, self.metadata)
             self.assertEqual(json.loads(output.read_text()), expected)
 
     def test_same_release_accepts_cross_build_without_relabeling_provenance(self):
@@ -108,18 +167,24 @@ class InferenceTests(unittest.TestCase):
             None; predictions work, runtime provenance survives and cache keys differ.
         """
         runtime = {**self.metadata, "binary_sha256": "b" * 64}
-        estimator = RatingEstimator(InferenceConfig(
-            model_directory=self.directory, engine_compatibility="same-release"
-        ))
+        estimator = RatingEstimator(
+            InferenceConfig(
+                model_directory=self.directory, engine_compatibility="same-release"
+            )
+        )
         game = GameInput.from_pgn(PGN)
         analysis = sample_analysis(game)
         result = estimator.predict_pgn(PGN, analysis=analysis, engine_metadata=runtime)
         expected = estimator.predictor.predict_game(game, analysis, self.metadata)
-        self.assertEqual((result.white, result.black), (expected["white"], expected["black"]))
+        self.assertEqual(
+            (result.white, result.black), (expected["white"], expected["black"])
+        )
         self.assertEqual(result.engine_metadata, runtime)
         self.assertEqual(result.engine_compatibility, "same-release")
         self.assertEqual(estimator.predictor.manifest["engine"], self.metadata)
-        self.assertNotEqual(AnalysisCache.key(game, runtime), AnalysisCache.key(game, self.metadata))
+        self.assertNotEqual(
+            AnalysisCache.key(game, runtime), AnalysisCache.key(game, self.metadata)
+        )
         with self.assertRaisesRegex(ValueError, "metadata"):
             estimator.predictor.predict_game(game, analysis, runtime)
 
@@ -132,7 +197,9 @@ class InferenceTests(unittest.TestCase):
         Returns:
             None; changed settings, release, protocol and incomplete provenance fail.
         """
-        predictor = RatingEstimator(InferenceConfig(model_directory=self.directory)).predictor
+        predictor = RatingEstimator(
+            InferenceConfig(model_directory=self.directory)
+        ).predictor
         invalid = [None, {}, {**self.metadata, "binary_sha256": "invalid"}]
         for field in ("depth", "multipv", "threads", "hash_mb"):
             metadata = deepcopy(self.metadata)
@@ -141,8 +208,13 @@ class InferenceTests(unittest.TestCase):
         invalid.append({**self.metadata, "id": {"name": "Different release"}})
         invalid.append({**self.metadata, "analysis_version": ANALYSIS_VERSION + 1})
         for metadata in invalid:
-            with self.subTest(metadata=metadata), self.assertRaisesRegex(ValueError, "metadata"):
-                predictor.validate_engine_metadata(metadata, engine_compatibility="same-release")
+            with (
+                self.subTest(metadata=metadata),
+                self.assertRaisesRegex(ValueError, "metadata"),
+            ):
+                predictor.validate_engine_metadata(
+                    metadata, engine_compatibility="same-release"
+                )
 
     def test_raw_pgn_same_release_uses_actual_runtime_metadata(self):
         """Apply cross-build policy before engine analysis and at prediction time.
@@ -154,13 +226,20 @@ class InferenceTests(unittest.TestCase):
             None; raw PGN analysis accepts a different hash and reports it unchanged.
         """
         runtime = {**self.metadata, "binary_sha256": "b" * 64}
-        estimator = RatingEstimator(InferenceConfig(
-            model_directory=self.directory, engine_executable="stockfish", cache_directory="cache",
-            engine_compatibility="same-release",
-        ))
+        estimator = RatingEstimator(
+            InferenceConfig(
+                model_directory=self.directory,
+                engine_executable="stockfish",
+                cache_directory="cache",
+                engine_compatibility="same-release",
+            )
+        )
         analyzer = MagicMock(metadata=runtime, cache_hits=0)
         analyzer.__enter__.return_value = analyzer
-        analyzer.analyze.return_value = ("c" * 64, sample_analysis(GameInput.from_pgn(PGN)))
+        analyzer.analyze.return_value = (
+            "c" * 64,
+            sample_analysis(GameInput.from_pgn(PGN)),
+        )
         with patch("elo_model.inference.StockfishAnalyzer", return_value=analyzer):
             result = estimator.predict_pgn(PGN)
         analyzer.analyze.assert_called_once()
@@ -183,14 +262,24 @@ class InferenceTests(unittest.TestCase):
         cls.metadata = {
             "id": {"name": "Test engine"},
             "binary_sha256": "a" * 64,
-            "settings": {key: value for key, value in asdict(EngineConfig("mock")).items() if key != "executable"},
+            "settings": {
+                key: value
+                for key, value in asdict(EngineConfig("mock")).items()
+                if key != "executable"
+            },
             "analysis_version": ANALYSIS_VERSION,
         }
         frame = synthetic_frame()
-        result = ModelTrainer(TrainingConfig(trials=0, max_trees=5)).fit(frame)
+        result = TorchModelTrainer(
+            NeuralTrainingConfig(hidden_sizes=(8,), max_epochs=2, progress=False)
+        ).fit(frame)
         result.metadata.update(engine=cls.metadata)
         export_bundle(
-            result.models, cls.directory, frame.iloc[-10:], result.metadata, result.report,
+            result.models,
+            cls.directory,
+            frame.iloc[-10:],
+            result.metadata,
+            result.report,
             model_version="test-v1",
         )
 
@@ -207,7 +296,9 @@ class InferenceTests(unittest.TestCase):
         game = GameInput.from_pgn(PGN)
         analysis = sample_analysis(game)
         with patch("elo_model.inference.StockfishAnalyzer") as engine:
-            result = estimator.predict_pgn(PGN, analysis=analysis, engine_metadata=self.metadata)
+            result = estimator.predict_pgn(
+                PGN, analysis=analysis, engine_metadata=self.metadata
+            )
             engine.assert_not_called()
         expected = estimator.predictor.predict_game(game, analysis, self.metadata)
         self.assertEqual(result.white, expected["white"])
@@ -230,17 +321,27 @@ class InferenceTests(unittest.TestCase):
             None; engine options, analysis and cache reporting are asserted.
         """
         config = InferenceConfig(
-            model_directory=self.directory, engine_executable="stockfish", cache_directory="cache"
+            model_directory=self.directory,
+            engine_executable="stockfish",
+            cache_directory="cache",
         )
         estimator = RatingEstimator(config)
         analyzer = MagicMock(metadata=self.metadata, cache_hits=1)
         analyzer.__enter__.return_value = analyzer
-        analyzer.analyze.return_value = ("b" * 64, sample_analysis(GameInput.from_pgn(PGN)))
-        with patch("elo_model.inference.StockfishAnalyzer", return_value=analyzer) as factory:
+        analyzer.analyze.return_value = (
+            "b" * 64,
+            sample_analysis(GameInput.from_pgn(PGN)),
+        )
+        with patch(
+            "elo_model.inference.StockfishAnalyzer", return_value=analyzer
+        ) as factory:
             result = estimator.predict_pgn(PGN)
         self.assertTrue(result.cache_hit)
         self.assertEqual(result.analysis_key, "b" * 64)
-        self.assertEqual(asdict(factory.call_args.args[0]), {"executable": "stockfish", **self.metadata["settings"]})
+        self.assertEqual(
+            asdict(factory.call_args.args[0]),
+            {"executable": "stockfish", **self.metadata["settings"]},
+        )
         analyzer.__exit__.assert_called_once()
 
     def test_mismatched_engine_is_rejected_before_analysis(self):
@@ -252,9 +353,13 @@ class InferenceTests(unittest.TestCase):
         Returns:
             None; mismatch raises and analysis is not invoked.
         """
-        estimator = RatingEstimator(InferenceConfig(
-            model_directory=self.directory, engine_executable="stockfish", cache_directory="cache"
-        ))
+        estimator = RatingEstimator(
+            InferenceConfig(
+                model_directory=self.directory,
+                engine_executable="stockfish",
+                cache_directory="cache",
+            )
+        )
         analyzer = MagicMock(metadata={**self.metadata, "binary_sha256": "wrong"})
         analyzer.__enter__.return_value = analyzer
         with (

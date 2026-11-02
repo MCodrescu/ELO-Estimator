@@ -1,4 +1,4 @@
-"""Native LightGBM and weights-only PyTorch bundles for shared rating inference."""
+"""Weights-only PyTorch bundles for shared rating inference."""
 
 import json
 import os
@@ -8,7 +8,6 @@ from dataclasses import asdict
 from importlib.metadata import version
 from pathlib import Path
 
-import lightgbm as lgb
 import numpy as np
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, FiniteFloat
@@ -42,13 +41,13 @@ class RatingPredictor:
     """Load a trusted local artifact directory once and reuse across requests."""
 
     def __init__(self, directory: str | Path):
-        """Load native trees and reject incompatible feature contracts.
+        """Load neural checkpoints and reject incompatible feature contracts.
 
         Args:
             directory: Trusted artifact folder with model_manifest and schema.
 
         Returns:
-            None; the instance retains reusable boosters and an extractor.
+            None; the instance retains reusable networks and an extractor.
         """
         directory = Path(directory)
         self.manifest = json.loads(
@@ -57,29 +56,36 @@ class RatingPredictor:
         names = json.loads(
             (directory / "feature_names.json").read_text(encoding="utf-8")
         )
+
         self.schema = feature_schema(self.manifest["schema_version"])
         if (
             names != list(self.schema.names)
             or self.manifest["feature_hash"] != self.schema.fingerprint
-            or self.manifest.get("feature_config", {}).get("schema_version") != self.schema.version
+            or self.manifest.get("feature_config", {}).get("schema_version")
+            != self.schema.version
         ):
             raise ValueError(
                 "Artifact feature schema does not match this extraction code"
             )
+
         self.models = {}
-        backend = self.manifest.get("model_backend", "lightgbm")
-        if backend not in ("lightgbm", "pytorch"):
+        backend = self.manifest.get("model_backend")
+        if backend != "pytorch":
             raise ValueError(f"Unsupported model backend: {backend}")
+
         for name, filename in self.manifest["models"].items():
             path = directory / filename
             if path.resolve().parent != directory.resolve():
                 raise ValueError("Model file must be inside the artifact directory")
-            model = TorchRatingModel.load(path) if backend == "pytorch" else lgb.Booster(model_file=str(path))
-            if model.feature_name() != names:
-                raise ValueError("Booster feature names disagree with the saved schema")
+
+            model = TorchRatingModel.load(path)
+            if list(model.feature_names) != names:
+                raise ValueError("Network feature names disagree with the saved schema")
             self.models[name] = model
+
         if not self.models:
             raise ValueError("Artifact contains no models")
+
         self.extractor = GameFeatureExtractor(
             FeatureConfig(**self.manifest["feature_config"])
         )
@@ -99,6 +105,7 @@ class RatingPredictor:
             self.schema.names
         ):
             raise ValueError("DataFrame columns must exactly match saved feature order")
+
         matrix = np.asarray(features, dtype=float)
         if (
             matrix.ndim != 2
@@ -108,18 +115,24 @@ class RatingPredictor:
             raise ValueError(
                 "Expected a two-dimensional ordered feature matrix, finite or NaN"
             )
+
         if not len(matrix):
             return np.empty(0)
+
         if "pooled" in self.models:
-            return self.models["pooled"].predict(matrix, num_threads=1)
+            return self.models["pooled"].predict(matrix)
+
         if categories is None or len(categories) != len(matrix):
             raise ValueError("Supply one time category per feature row")
+
         result = np.empty(len(matrix))
         for category in set(categories):
             if category not in self.models:
                 raise ValueError(f"No trained model for category {category}")
+
             mask = np.asarray(categories) == category
-            result[mask] = self.models[category].predict(matrix[mask], num_threads=1)
+            result[mask] = self.models[category].predict(matrix[mask])
+
         return result
 
     def validate_engine_metadata(
@@ -139,25 +152,44 @@ class RatingPredictor:
         """
         if engine_compatibility not in ("exact", "same-release"):
             raise ValueError("Unknown engine compatibility policy")
+
         expected = self.manifest.get("engine")
         if expected is None or engine_metadata == expected:
             return
-        if engine_compatibility == "same-release" and isinstance(expected, dict) and isinstance(engine_metadata, dict):
-            expected_contract = {key: value for key, value in expected.items() if key != "binary_sha256"}
-            actual_contract = {key: value for key, value in engine_metadata.items() if key != "binary_sha256"}
+
+        if (
+            engine_compatibility == "same-release"
+            and isinstance(expected, dict)
+            and isinstance(engine_metadata, dict)
+        ):
+            expected_contract = {
+                key: value for key, value in expected.items() if key != "binary_sha256"
+            }
+            actual_contract = {
+                key: value
+                for key, value in engine_metadata.items()
+                if key != "binary_sha256"
+            }
             identity = expected.get("id")
             complete = (
-                isinstance(identity, dict) and bool(identity.get("name"))
-                and "settings" in expected and "analysis_version" in expected
+                isinstance(identity, dict)
+                and bool(identity.get("name"))
+                and "settings" in expected
+                and "analysis_version" in expected
             )
-            hashes = (expected.get("binary_sha256"), engine_metadata.get("binary_sha256"))
+            hashes = (
+                expected.get("binary_sha256"),
+                engine_metadata.get("binary_sha256"),
+            )
             valid_hashes = all(
-                isinstance(value, str) and len(value) == 64
+                isinstance(value, str)
+                and len(value) == 64
                 and all(character in "0123456789abcdef" for character in value)
                 for value in hashes
             )
             if complete and valid_hashes and expected_contract == actual_contract:
                 return
+
         raise ValueError(
             f"Analysis engine metadata must match the training artifact ({engine_compatibility})"
         )
@@ -191,29 +223,29 @@ class RatingPredictor:
         return response.model_dump()
 
 
-def _save_booster(model, path: Path) -> None:
-    """Atomically save the selected native tree or neural checkpoint.
+def _save_checkpoint(model: TorchRatingModel, path: Path) -> None:
+    """Atomically save the selected neural checkpoint.
 
     Args:
-        model: Native booster or neural model with a selected training iteration.
-        path: Destination text model path in an existing directory.
+        model: Neural model with its selected epoch weights loaded.
+        path: Destination checkpoint path in an existing directory.
 
     Returns:
         None; filesystem and serialization failures propagate.
     """
     with tempfile.NamedTemporaryFile(
-        dir=path.parent, delete=False, suffix=".txt"
+        dir=path.parent, delete=False, suffix=".pt"
     ) as handle:
         temporary = Path(handle.name)
     try:
-        model.save_model(str(temporary), num_iteration=model.best_iteration or -1)
+        model.save_model(temporary)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)
 
 
 def export_bundle(
-    models: dict,
+    models: dict[str, TorchRatingModel],
     directory: str | Path,
     sample: pd.DataFrame,
     metadata: dict,
@@ -224,7 +256,7 @@ def export_bundle(
     """Save model weights and verify reloaded predictions on supplied sample rows.
 
     Args:
-        models: Pooled or category-name to native booster or neural model mapping.
+        models: Pooled or category-name to neural model mapping.
         directory: Output artifact directory.
         sample: Held-out feature rows, with category metadata for routing.
         metadata: Training, engine and target provenance for the manifest.
@@ -241,32 +273,42 @@ def export_bundle(
         raise ValueError("model_version must not be empty")
     if not set(models).issubset({"pooled", *TIME_CATEGORIES}):
         raise ValueError("Invalid model names")
-    backends = {"pytorch" if isinstance(model, TorchRatingModel) else "lightgbm" for model in models.values()}
-    if len(backends) != 1:
-        raise ValueError("Export requires nonempty models with a single backend")
-    backend = backends.pop()
-    if metadata.get("model_backend", backend) != backend:
+    if not models or not all(
+        isinstance(model, TorchRatingModel) for model in models.values()
+    ):
+        raise ValueError("Export requires nonempty PyTorch models")
+    if metadata.get("model_backend", "pytorch") != "pytorch":
         raise ValueError("Model backend disagrees with training metadata")
+
     feature_config = feature_config or FeatureConfig()
     schema = feature_schema(feature_config.schema_version)
     validate_feature_engine(feature_config, metadata.get("engine"))
+
     directory = Path(directory)
     existing = directory / MODEL_MANIFEST_FILENAME
     if existing.exists():
         previous = json.loads(existing.read_text(encoding="utf-8"))
-        if previous.get("engine") != metadata.get("engine") or previous["schema_version"] != schema.version:
-            raise ValueError("Export a different contract into a separate versioned directory")
-        if previous.get("model_backend", "lightgbm") != backend:
-            raise ValueError("Export a different model backend into a separate directory")
+        if (
+            previous.get("engine") != metadata.get("engine")
+            or previous["schema_version"] != schema.version
+        ):
+            raise ValueError(
+                "Export a different contract into a separate versioned directory"
+            )
+        if previous.get("model_backend") != "pytorch":
+            raise ValueError(
+                "Export a different model backend into a separate directory"
+            )
+
     directory.mkdir(parents=True, exist_ok=True)
-    extension = "pt" if backend == "pytorch" else "txt"
-    files = {name: f"{name}.{extension}" for name in models}
+    files = {name: f"{name}.pt" for name in models}
     for name, model in models.items():
-        _save_booster(model, directory / files[name])
+        _save_checkpoint(model, directory / files[name])
+
     manifest = {
         **metadata,
         "artifact_version": 1,
-        "model_backend": backend,
+        "model_backend": "pytorch",
         "schema_version": schema.version,
         "feature_hash": schema.fingerprint,
         "models": files,
@@ -283,16 +325,14 @@ def export_bundle(
             "estimated_seconds": f"base + {TIME_CONTROL_INCREMENT_MOVES} * increment",
             "upper_bounds": dict(zip(TIME_CATEGORIES[:-1], TIME_CATEGORY_LIMITS[:-1])),
         },
-        "libraries": {
-            name: version(name)
-            for name in ("torch" if backend == "pytorch" else "lightgbm", "numpy", "scikit-learn", "chess")
-        },
+        "libraries": {name: version(name) for name in ("torch", "numpy", "chess")},
     }
     write_json(directory / "feature_names.json", schema.names)
     if model_version is not None:
         manifest["model_version"] = model_version
     write_json(directory / "feature_groups.json", schema.groups)
     write_json(directory / MODEL_MANIFEST_FILENAME, manifest)
+
     predictor = RatingPredictor(directory)
     matrix = sample.loc[:, list(schema.names)]
     categories = sample["category"].tolist()
@@ -303,16 +343,16 @@ def export_bundle(
             if name == "pooled"
             else (sample["category"] == name).to_numpy()
         )
-        expected[mask] = model.predict(matrix.loc[mask], num_threads=1)
+        expected[mask] = model.predict(matrix.loc[mask])
+
     actual = predictor.predict(matrix, categories)
-    if backend == "pytorch":
-        np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-4)
-    else:
-        np.testing.assert_allclose(actual, expected, rtol=1e-12, atol=1e-9)
+    np.testing.assert_allclose(actual, expected, rtol=1e-6, atol=1e-4)
+
     predictor.predict(matrix.iloc[:1], categories[:1])
     started = time.perf_counter()
     for _ in range(30):
         predictor.predict(matrix.iloc[:1], categories[:1])
+
     verification = {
         "sample_rows": len(sample),
         "max_absolute_difference": float(np.max(np.abs(actual - expected))),
